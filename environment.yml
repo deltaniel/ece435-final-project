@@ -1,0 +1,25 @@
+name: safe_rlhf
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python
+  - numpy
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - tqdm
+  - pyyaml
+  - requests
+  - jupyterlab
+  - pip
+  - pytorch
+  - torchvision
+  - torchaudio
+  # Uncomment the following line if you're using GPU acceleration
+  # - cudatoolkit=11.3
+  - pip:
+      - transformers
+      - datasets
+      - accelerate
+      - gym
