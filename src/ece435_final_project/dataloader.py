@@ -36,6 +36,9 @@ class RLHFDatasetLoader:
     
     def tokenize_dataset(self):
         # Tokenize the dataset
+        if self.tokenizer.pad_token is None:
+            # Use the EOS token as the pad token.
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenized_dataset = self.dataset.map(
             lambda x: self.tokenizer(x['prompt'], truncation=True, max_length=self.max_length),
             batched=True,
@@ -63,3 +66,14 @@ class RLHFDatasetLoader:
         self.tokenize_dataset()
         self.create_dataloader()
         return self.dataloader
+    
+if __name__ == "__main__":
+    # Create an instance of the dataset loader
+    dataset_loader = RLHFDatasetLoader()
+    # Prepare the dataloader
+    train_dataloader = dataset_loader.get_dataloader()
+
+    # Iterate over a single batch to verify the loader works
+    for batch in train_dataloader:
+        print({key: value.shape for key, value in batch.items()})
+        break
