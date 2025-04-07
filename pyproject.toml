@@ -1,0 +1,38 @@
+[project]
+authors = [{name = "Daniel Ruan", email = "daniel.ruan@princeton.edu"}]
+dependencies = []
+name = "ece435-final-project"
+requires-python = ">= 3.11"
+version = "0.1.0"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.pixi.project]
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64"]
+
+[tool.pixi.feature.gpu.system-requirements]
+cuda = "12.0"
+
+[tool.pixi.pypi-dependencies]
+ece435_final_project = { path = ".", editable = true }
+
+[tool.pixi.tasks]
+
+[tool.pixi.feature.gpu.dependencies]
+pytorch-gpu = "*"
+cuda-version = "12.6.*"
+
+[tool.pixi.feature.cpu.dependencies]
+pytorch-cpu = "*"
+
+[tool.pixi.environments]
+cpu = ["cpu"]
+gpu = ["gpu"]
+
+[tool.pixi.dependencies]
+ruff = ">=0.11.4,<0.12"
+transformers = ">=4.51.0,<5"
+accelerate = ">=1.5.2,<2"

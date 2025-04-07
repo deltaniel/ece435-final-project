@@ -76,3 +76,6 @@ docker-compose.override.yml
 .DS_Store
 *.swp
 *.swo
+# pixi environments
+.pixi
+*.egg-info
