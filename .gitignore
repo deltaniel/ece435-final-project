@@ -1,3 +1,6 @@
+output/
+logs/
+
 # Python bytecode and compiled files
 __pycache__/
 *.py[cod]
