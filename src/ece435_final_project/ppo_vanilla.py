@@ -16,12 +16,15 @@ class Actor(nn.Module): # LM to be updated/fine-tuned; our policy.
 
     @torch.no_grad()
     def generate(self, input_ids, attention_mask):
-        return self.model.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_length=512, num_return_sequences=1)
+        response = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_length=512, num_return_sequences=1)
+        full_mask = torch.ones_like(response)
+        return response, full_mask
     
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
-        log_probs = torch.nn.functional.log_softmax(outputs.logits, dim=-1)
-        return log_probs
+        logits = outputs.logits
+        logprobs = torch.log_softmax(logits, dim=-1)
+        return logits, logprobs
 
 class RewardModel(nn.Module): # used for computing reward only
     def __init__(self, model_name):
@@ -49,13 +52,14 @@ class ReferenceModel(nn.Module): # LM (not to be updated - just for kl div compu
 
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
-        log_probs = torch.nn.functional.log_softmax(outputs.logits, dim=-1)
-        return log_probs
-
+        logits = outputs.logits
+        logprobs = torch.log_softmax(logits, dim=-1)
+        return logits, logprobs
+    
 class PPO:
     def __init__(self, actor, reward_critic, reward_model, ref_model, sft_dataset, gamma, beta, epsilon, alpha, lr, gae_lambda, avg_cost, critic_loss_wt):
         """
-        gamma: PTX loss weight
+        gamma: discount
         beta: KL loss weight
         epsilon: PPO clipping parameter
         lr: learning rate
@@ -76,35 +80,41 @@ class PPO:
         self.alpha = alpha
         self.avg_cost = avg_cost
 
-        self.optimizer = optim.Adam(list(self.actor.parameters()) + list(self.reward_critic.parameters()), lr=lr)
+        self.actor.optimizer = optim.AdamW(self.actor.parameters(), lr=lr)
+        self.reward_critic.optimizer = optim.AdamW(self.reward_critic.parameters(), lr=lr)
 
     # Compute the KL penalty
     def kl_penalty(self, actor_logprobs, ref_logprobs):
-        kl_penalty = torch.mean(torch.nn.functional.kl_div(actor_logprobs, ref_logprobs, reduction='batchmean'))
+        actor_probs = torch.exp(actor_logprobs)
+        kl_penalty = torch.sum(actor_probs * (actor_logprobs - ref_logprobs), dim=-1)
         return kl_penalty
+
+    # Gather log probs
+    def gather_log_probs(self, logprobs, tokens):
+        return logprobs.gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
 
     # Compute the reward
     def reward(self, input_ids, attention_mask, actor_logprobs, ref_logprobs):
-        r_rm = self.reward_model(input_ids, attention_mask)
+        r_rm = self.reward_model(input_ids, attention_mask).squeeze(-1)
         kl_penalty = self.kl_penalty(actor_logprobs, ref_logprobs)
-        r_hat = r_rm + (self.beta / 2) * kl_penalty
+        r_hat = r_rm - (self.beta / 2) * kl_penalty
 
         return r_hat
 
     # Calculate the GAE
     def gae(self, rewards, values, gamma=0.99, lam=0.95):
-        next_values = torch.cat([values[:, 1:], torch.zeros_like(values[:, :1])], dim=1)
-        deltas = rewards + gamma * next_values - values
-        adv = torch.zeros_like(deltas)
-        last_gae = 0
-        for t in reversed(range(deltas.size(1))):
-            last_gae = deltas[:, t] + gamma * lam * last_gae
-            adv[:, t] = last_gae
-        returns = adv + values
-        return adv, returns
+        B, T = rewards.shape()
+        adv = torch.zeros_like(rewards)
+        gae = 0
+        for t in reversed(range(T - 1)):
+            delta = rewards[:, t] + gamma * values[:, t + 1] - values[:, t]
+            gae   = delta + gamma * lam * gae
+            adv[:, t] = gae
+        returns = adv + values[: , :-1]
+        return adv.detach(), returns.detach()
 
-    def actor_loss(self, old_log_probs, new_log_probs, advantages):
-        ratio = torch.exp(new_log_probs - old_log_probs)
+    def actor_loss(self, old_logprobs, new_log_probs, advantages):
+        ratio = torch.exp(new_log_probs - old_logprobs)
         surr1 = ratio * advantages
         surr2 = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon) * advantages
         return -torch.mean(torch.min(surr1, surr2))
@@ -114,33 +124,40 @@ class PPO:
     
     # Update the actor
     def ppo_update(self, input_ids, attention_mask):
-        # Generate response
-        response = self.actor.generate(input_ids, attention_mask)
-        # Generate old logprobs
-        old_logprobs = self.actor.forward(input_ids, attention_mask)
-        # Concatenate prompt and response
-        full_ids = torch.cat((input_ids, response), dim=1)
-        resp_mask = torch.ones_like(response)
-        full_mask = torch.cat([attention_mask, resp_mask], dim=-1)
-        # Compute logprobs
-        logprobs = self.actor.forward(full_ids, full_mask)
-        # Compute reference logits
-        ref_logprobs = self.ref_model.forward(full_ids, full_mask)
+        with torch.no_grad():
+            # Generate response
+            response, masks = self.actor.generate(input_ids, attention_mask)
+            # Compute actor and reference logprobs
+            old_actor_logprobs, _ = self.actor.forward(response, masks)
+            old_logprobs = self.gather_log_probs(old_actor_logprobs, response).detach()
+        
+        # Compute new logprobs
+        actor_logprobs, _ = self.actor.forward(response, masks)
+        ref_logprobs, _ = self.ref_model.forward(response, masks)
+        new_logprobs = self.gather_log_probs(actor_logprobs, response)
 
-        # Compute advantage for reward and cost
-        rewards = self.reward(full_ids, full_mask, logprobs, ref_logprobs)
-        reward_values = self.reward_critic_model(input_ids, attention_mask)
-        advantage_reward, returns = self.gae(rewards, reward_values)
+        # Compute advantage for reward
+        rewards = self.reward(response, masks, actor_logprobs, ref_logprobs)
+        R = torch.zeros_like(response, dtype=actor_logprobs.dtype)
+        R[:, -1] = rewards
+        reward_values = self.reward_critic(response, masks).squeeze(-1)
+        V = torch.zeros_like(response, dtype=reward_values.dtype)
+        V[:, -1]  = reward_values
+        advantage_reward, returns = self.gae(R, V)
 
         # Compute the losses
-        actor_loss = self.actor_loss(old_logprobs, logprobs, advantage_reward)
-        critic_loss = self.critic_loss(reward_values, returns) # rewards or returns?
+        actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward)
+        critic_loss = self.critic_loss(reward_values, returns)
         total_loss = self.critic_loss_wt * critic_loss + actor_loss
 
         # Update the actor
-        self.optimizer.zero_grad()
+        self.actor.optimizer.zero_grad()
+        self.reward_critic.optimizer.zero_grad()
         total_loss.backward()
-        self.optimizer.step()
+        nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+        nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 1.0)
+        self.actor.optimizer.step()
+        self.reward_critic.optimizer.step()
 
         return total_loss.item()
     
