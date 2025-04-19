@@ -12,7 +12,7 @@ from dataloader import RLHFDatasetLoader
 class Actor(nn.Module): # LM to be updated/fine-tuned; our policy.
     def __init__(self, model_name):
         super(Actor, self).__init__()
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to("cpu")
+        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
 
     @torch.no_grad()
     def generate(self, input_ids, attention_mask):
@@ -26,7 +26,7 @@ class Actor(nn.Module): # LM to be updated/fine-tuned; our policy.
 class RewardModel(nn.Module): # used for computing reward only
     def __init__(self, model_name):
         super(RewardModel, self).__init__()
-        self.model = AutoModelForScore.from_pretrained(model_name, torch_dtype=torch.bfloat16).to("cpu")
+        self.model = AutoModelForScore.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
 
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
@@ -36,7 +36,7 @@ class RewardModel(nn.Module): # used for computing reward only
 class RewardCriticModel(nn.Module): # initialized based on reward model, optimized using advantage estimates
     def __init__(self, model_name):
         super(RewardCriticModel, self).__init__()
-        self.model = AutoModelForScore.from_pretrained(model_name, torch_dtype=torch.bfloat16).to("cpu")
+        self.model = AutoModelForScore.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
 
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
@@ -45,7 +45,7 @@ class RewardCriticModel(nn.Module): # initialized based on reward model, optimiz
 class ReferenceModel(nn.Module): # LM (not to be updated - just for kl div computation)
     def __init__(self, model_name):
         super(ReferenceModel, self).__init__()
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to("cpu")
+        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
 
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
@@ -155,13 +155,13 @@ class PPO:
                 steps += 1
                 print(f"Epoch: {epoch}, Loss: {loss}")
 
-# if __name__ == "__main__":
-#     actor = Actor("PKU-Alignment/alpaca-7b-reproduced")
-#     reward_critic = RewardCriticModel("PKU-Alignment/beaver-7b-v3.0-reward")
-#     ref_model = ReferenceModel("PKU-Alignment/alpaca-7b-reproduced")
-#     reward_model = RewardModel("PKU-Alignment/beaver-7b-v3.0-reward")
-#     dataloader = RLHFDatasetLoader()
-#     sft_dataset = dataloader.get_dataloader()
-#     ppo = PPO(actor, reward_critic, reward_model, ref_model, sft_dataset, 0.99, 0.99, 0.1, 0.1, 0.001, 0.95, 0, 0.5)
+if __name__ == "__main__":
+    actor = Actor("PKU-Alignment/alpaca-7b-reproduced")
+    reward_critic = RewardCriticModel("PKU-Alignment/beaver-7b-v3.0-reward")
+    ref_model = ReferenceModel("PKU-Alignment/alpaca-7b-reproduced")
+    reward_model = RewardModel("PKU-Alignment/beaver-7b-v3.0-reward")
+    dataloader = RLHFDatasetLoader()
+    sft_dataset = dataloader.get_dataloader()
+    ppo = PPO(actor, reward_critic, reward_model, ref_model, sft_dataset, 0.99, 0.99, 0.1, 0.1, 0.001, 0.95, 0, 0.5)
 
-#     ppo.train(5)
+    ppo.train(5)
