@@ -7,110 +7,63 @@ from transformers import AutoModelForCausalLM
 from safe_rlhf.models import AutoModelForScore
 from dataloader import RLHFDatasetLoader
 
-# ACTOR (policy)
-# Tested with PKU-Alignment/alpaca-7b-reproduced and PKU-Alignment/beaver-7b-v3.0-reward (see below)
-class Actor(nn.Module): # LM to be updated/fine-tuned; our policy.
-    def __init__(self, model_name):
-        super(Actor, self).__init__()
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
-
-    @torch.no_grad()
-    def generate(self, input_ids, attention_mask):
-        response = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_length=512, num_return_sequences=1)
-        full_mask = torch.ones_like(response)
-        return response, full_mask
-    
-    def forward(self, input_ids, attention_mask):
-        outputs = self.model(input_ids, attention_mask)
-        logits = outputs.logits
-        logprobs = torch.log_softmax(logits, dim=-1)
-        return logits, logprobs
-
-class RewardModel(nn.Module): # used for computing reward only
-    def __init__(self, model_name):
-        super(RewardModel, self).__init__()
-        self.model = AutoModelForScore.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
-
-    def forward(self, input_ids, attention_mask):
-        outputs = self.model(input_ids, attention_mask)
-        return outputs.scores
-
-# CRITIC (value)
-class RewardCriticModel(nn.Module): # initialized based on reward model, optimized using advantage estimates
-    def __init__(self, model_name):
-        super(RewardCriticModel, self).__init__()
-        self.model = AutoModelForScore.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
-
-    def forward(self, input_ids, attention_mask):
-        outputs = self.model(input_ids, attention_mask)
-        return outputs.scores
-    
-class ReferenceModel(nn.Module): # LM (not to be updated - just for kl div computation)
-    def __init__(self, model_name):
-        super(ReferenceModel, self).__init__()
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
-
-    def forward(self, input_ids, attention_mask):
-        outputs = self.model(input_ids, attention_mask)
-        logits = outputs.logits
-        logprobs = torch.log_softmax(logits, dim=-1)
-        return logits, logprobs
-    
 class PPO:
-    def __init__(self, actor, reward_critic, reward_model, ref_model, sft_dataset, gamma, beta, epsilon, alpha, lr, gae_lambda, avg_cost, critic_loss_wt):
+    def __init__(self, actor, reward_critic, reward_model, ref_model, sft_dataset, critic_loss_wt, gamma, beta, epsilon, gae_lambda, lr):
         """
+        critic_loss_wt: weight for the critic loss
         gamma: discount
         beta: KL loss weight
         epsilon: PPO clipping parameter
+        gae_lambda: lambda for GAE
         lr: learning rate
-        lambda_init: initial value for lambda
-        avg_cost: average cost
         """
-        self.actor = actor
-        self.reward_critic = reward_critic
-        self.reward_model = reward_model
-        self.ref_model = ref_model
+        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, device_map="auto")
+        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, device_map="auto")
+        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, device_map="auto")
+        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, device_map="auto")
         self.sft_dataset = sft_dataset
         self.critic_loss_wt = critic_loss_wt
-
-        self.gae_lambda = gae_lambda
         self.gamma = gamma
         self.beta = beta
         self.epsilon = epsilon
-        self.alpha = alpha
-        self.avg_cost = avg_cost
+        self.gae_lambda = gae_lambda
 
         self.actor.optimizer = optim.AdamW(self.actor.parameters(), lr=lr)
         self.reward_critic.optimizer = optim.AdamW(self.reward_critic.parameters(), lr=lr)
+    
+    # Gather log probabilities
+    def gather_log_probs(self, logprobs, response, input_ids):
+        token_lp = logprobs[:, :-1, :]
+        resp_token_lp = token_lp[:, input_ids.size(1):, :]  
+        return resp_token_lp.gather(-1, response.unsqueeze(-1)).squeeze(-1)
 
     # Compute the KL penalty
     def kl_penalty(self, actor_logprobs, ref_logprobs):
-        actor_probs = torch.exp(actor_logprobs)
-        kl_penalty = torch.sum(actor_probs * (actor_logprobs - ref_logprobs), dim=-1)
-        return kl_penalty
-
-    # Gather log probs
-    def gather_log_probs(self, logprobs, tokens):
-        return logprobs.gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
-
+        kl_step = actor_logprobs - ref_logprobs
+        return - self.beta * kl_step 
+        
     # Compute the reward
-    def reward(self, input_ids, attention_mask, actor_logprobs, ref_logprobs):
-        r_rm = self.reward_model(input_ids, attention_mask).squeeze(-1)
+    @torch.no_grad()
+    def reward(self, input_ids, attention_mask, output_mask, actor_logprobs, ref_logprobs):
+        r_rm = self.reward_model(input_ids, attention_mask).end_scores.squeeze(-1)
         kl_penalty = self.kl_penalty(actor_logprobs, ref_logprobs)
-        r_hat = r_rm - (self.beta / 2) * kl_penalty
+        rewards = kl_penalty.clone()      
+        end_idx = output_mask.long().sum(dim=1) - 1  
+        batch_idx = torch.arange(rewards.size(0), device=rewards.device)
+        rewards[batch_idx, end_idx] += r_rm 
 
-        return r_hat
+        return rewards
 
     # Calculate the GAE
     def gae(self, rewards, values, gamma=0.99, lam=0.95):
-        B, T = rewards.shape()
+        B, T = rewards.shape
         adv = torch.zeros_like(rewards)
-        gae = 0
+        gae = torch.zeros(B, device=values.device)
         for t in reversed(range(T - 1)):
             delta = rewards[:, t] + gamma * values[:, t + 1] - values[:, t]
-            gae   = delta + gamma * lam * gae
+            gae = delta + gamma * lam * gae
             adv[:, t] = gae
-        returns = adv + values[: , :-1]
+        returns = adv + values
         return adv.detach(), returns.detach()
 
     def actor_loss(self, old_logprobs, new_log_probs, advantages):
@@ -122,30 +75,42 @@ class PPO:
     def critic_loss(self, values, returns):
         return torch.mean((values - returns) ** 2)
     
-    # Update the actor
-    def ppo_update(self, input_ids, attention_mask):
+    # Generate a rollout and calculate the advantage
+    def rollout(self, input_ids, attention_mask):
+        device = next(self.actor.parameters()).device
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
+
         with torch.no_grad():
             # Generate response
-            response, masks = self.actor.generate(input_ids, attention_mask)
-            # Compute actor and reference logprobs
-            old_actor_logprobs, _ = self.actor.forward(response, masks)
-            old_logprobs = self.gather_log_probs(old_actor_logprobs, response).detach()
-        
-        # Compute new logprobs
-        actor_logprobs, _ = self.actor.forward(response, masks)
-        ref_logprobs, _ = self.ref_model.forward(response, masks)
-        new_logprobs = self.gather_log_probs(actor_logprobs, response)
+            sequence = self.actor.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
+            
+            L_prompt  = input_ids.size(1)
+            response  = sequence[:, L_prompt:]
+            resp_masks  = torch.ones_like(response)
+            full_masks = torch.cat([attention_mask, resp_masks], dim=1)
 
-        # Compute advantage for reward
-        rewards = self.reward(response, masks, actor_logprobs, ref_logprobs)
-        R = torch.zeros_like(response, dtype=actor_logprobs.dtype)
-        R[:, -1] = rewards
-        reward_values = self.reward_critic(response, masks).squeeze(-1)
-        V = torch.zeros_like(response, dtype=reward_values.dtype)
-        V[:, -1]  = reward_values
-        advantage_reward, returns = self.gae(R, V)
+            old_logits = self.actor(sequence, full_masks).logits
+            old_lp = torch.log_softmax(old_logits, dim=-1)
+            old_logprobs = self.gather_log_probs(old_lp, response, input_ids)
 
-        # Compute the losses
+            ref_logits = self.ref_model(sequence, full_masks).logits
+            ref_lp = torch.log_softmax(ref_logits, dim=-1)
+            ref_logprobs = self.gather_log_probs(ref_lp, response, input_ids)
+
+            # Compute advantage for reward
+            rewards = self.reward(sequence, full_masks, resp_masks, old_logprobs, ref_logprobs)
+            reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
+            advantage_reward, returns = self.gae(rewards, reward_values, self.gamma, self.gae_lambda)
+
+        return sequence, response, full_masks, input_ids, old_logprobs, advantage_reward, reward_values, returns
+    
+    def ppo_update(self, sequence, response, full_masks, input_ids, old_logprobs, advantage_reward, reward_values, returns):
+        # Compute the new log probabilities
+        new_logits = self.actor(sequence, full_masks).logits
+        new_lp = torch.log_softmax(new_logits, dim=-1)
+        new_logprobs = self.gather_log_probs(new_lp, response, input_ids)
+
         actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward)
         critic_loss = self.critic_loss(reward_values, returns)
         total_loss = self.critic_loss_wt * critic_loss + actor_loss
@@ -160,25 +125,30 @@ class PPO:
         self.reward_critic.optimizer.step()
 
         return total_loss.item()
-    
+
     def train(self, num_epochs):
-        # Initialize average cost
-        steps = 0
         for epoch in range(num_epochs):
             for batch in self.sft_dataset:
                 print("BATCH: ")
                 print(batch)
-                loss = self.ppo_update(**batch)
-                steps += 1
+                (sequence, response, full_masks, input_ids, old_logprobs, advantage_reward, reward_values, returns) = self.rollout(
+                    batch['input_ids'], batch['attention_mask'])
+                loss = self.ppo_update(sequence, response, full_masks, input_ids, old_logprobs, advantage_reward, reward_values, returns)
                 print(f"Epoch: {epoch}, Loss: {loss}")
 
 if __name__ == "__main__":
-    actor = Actor("PKU-Alignment/alpaca-7b-reproduced")
-    reward_critic = RewardCriticModel("PKU-Alignment/beaver-7b-v3.0-reward")
-    ref_model = ReferenceModel("PKU-Alignment/alpaca-7b-reproduced")
-    reward_model = RewardModel("PKU-Alignment/beaver-7b-v3.0-reward")
     dataloader = RLHFDatasetLoader()
     sft_dataset = dataloader.get_dataloader()
-    ppo = PPO(actor, reward_critic, reward_model, ref_model, sft_dataset, 0.99, 0.99, 0.1, 0.1, 0.001, 0.95, 0, 0.5)
+    ppo = PPO(actor="PKU-Alignment/alpaca-7b-reproduced", 
+              reward_critic="PKU-Alignment/beaver-7b-v3.0-reward",
+              reward_model="PKU-Alignment/beaver-7b-v3.0-reward",
+              ref_model="PKU-Alignment/alpaca-7b-reproduced", 
+              sft_dataset=sft_dataset, 
+              critic_loss_wt=0.5,
+              gamma=0.99, 
+              beta=0.1, 
+              epsilon=0.1, 
+              gae_lambda=0.95,
+              lr=1e-5)
 
     ppo.train(5)
