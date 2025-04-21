@@ -28,14 +28,24 @@ class PPO:
         self.epsilon = epsilon
         self.gae_lambda = gae_lambda
 
-        self.actor.optimizer = optim.AdamW(self.actor.parameters(), lr=lr)
-        self.reward_critic.optimizer = optim.AdamW(self.reward_critic.parameters(), lr=lr)
+        self.actor_optim = optim.AdamW(self.actor.parameters(), lr=lr)
+        self.critic_optim = optim.AdamW(self.reward_critic.parameters(), lr=lr)
+
+        self.reward_model.eval()
+        for p in self.reward_model.parameters():
+            p.requires_grad = False
     
     # Gather log probabilities
-    def gather_log_probs(self, logprobs, response, input_ids):
+    def gather_log_probs(self, logprobs, response, attention_mask):
         token_lp = logprobs[:, :-1, :]
-        resp_token_lp = token_lp[:, input_ids.size(1):, :]  
-        return resp_token_lp.gather(-1, response.unsqueeze(-1)).squeeze(-1)
+        prompt_lens = attention_mask.sum(dim=1).long()         
+        batch_logp = []
+        for i, L in enumerate(prompt_lens):
+            lp_i = token_lp[i, L:, :].gather(-1,
+                        response[i].unsqueeze(-1)).squeeze(-1)
+            batch_logp.append(lp_i)
+
+        return torch.stack(batch_logp, dim=0)
 
     # Compute the KL penalty
     def kl_penalty(self, actor_logprobs, ref_logprobs):
@@ -43,7 +53,7 @@ class PPO:
         return - self.beta * kl_step 
         
     # Compute the reward
-    @torch.no_grad()
+    @torch.no_grad
     def reward(self, input_ids, attention_mask, output_mask, actor_logprobs, ref_logprobs):
         r_rm = self.reward_model(input_ids, attention_mask).end_scores.squeeze(-1)
         kl_penalty = self.kl_penalty(actor_logprobs, ref_logprobs)
@@ -81,6 +91,10 @@ class PPO:
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
 
+        self.actor.eval()
+        self.ref_model.eval()
+        self.reward_critic.eval()
+
         with torch.no_grad():
             # Generate response
             sequence = self.actor.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
@@ -92,24 +106,24 @@ class PPO:
 
             old_logits = self.actor(sequence, full_masks).logits
             old_lp = torch.log_softmax(old_logits, dim=-1)
-            old_logprobs = self.gather_log_probs(old_lp, response, input_ids)
+            old_logprobs = self.gather_log_probs(old_lp, response, attention_mask)
 
             ref_logits = self.ref_model(sequence, full_masks).logits
             ref_lp = torch.log_softmax(ref_logits, dim=-1)
-            ref_logprobs = self.gather_log_probs(ref_lp, response, input_ids)
+            ref_logprobs = self.gather_log_probs(ref_lp, response, attention_mask)
 
             # Compute advantage for reward
             rewards = self.reward(sequence, full_masks, resp_masks, old_logprobs, ref_logprobs)
             reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
             advantage_reward, returns = self.gae(rewards, reward_values, self.gamma, self.gae_lambda)
 
-        return sequence, response, full_masks, input_ids, old_logprobs, advantage_reward, reward_values, returns
+        return sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns
     
-    def ppo_update(self, sequence, response, full_masks, input_ids, old_logprobs, advantage_reward, reward_values, returns):
+    def ppo_update(self, sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns):
         # Compute the new log probabilities
         new_logits = self.actor(sequence, full_masks).logits
         new_lp = torch.log_softmax(new_logits, dim=-1)
-        new_logprobs = self.gather_log_probs(new_lp, response, input_ids)
+        new_logprobs = self.gather_log_probs(new_lp, response, attention_mask)
 
         actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward)
         critic_loss = self.critic_loss(reward_values, returns)
@@ -121,19 +135,21 @@ class PPO:
         total_loss.backward()
         nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
         nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 1.0)
-        self.actor.optimizer.step()
-        self.reward_critic.optimizer.step()
+        self.actor_optim.step()
+        self.critic_optim.step()
 
         return total_loss.item()
 
     def train(self, num_epochs):
+        self.actor.train()
+        self.reward_critic.train()
         for epoch in range(num_epochs):
             for batch in self.sft_dataset:
                 print("BATCH: ")
                 print(batch)
-                (sequence, response, full_masks, input_ids, old_logprobs, advantage_reward, reward_values, returns) = self.rollout(
+                (sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns) = self.rollout(
                     batch['input_ids'], batch['attention_mask'])
-                loss = self.ppo_update(sequence, response, full_masks, input_ids, old_logprobs, advantage_reward, reward_values, returns)
+                loss = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns)
                 print(f"Epoch: {epoch}, Loss: {loss}")
 
 if __name__ == "__main__":
