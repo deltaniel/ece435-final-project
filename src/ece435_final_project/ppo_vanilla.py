@@ -8,6 +8,7 @@ from dataloader import RLHFDatasetLoader
 from safe_rlhf.models import AutoModelForScore
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM
+from accelerate import Accelerator
 
 CACHE_DIR = os.getenv("HF_HOME")
 
@@ -21,12 +22,11 @@ class PPO:
         gae_lambda: lambda for GAE
         lr: learning rate
         """
-
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to(device)
-        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to(device)
-        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to(device)
-        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to(device)
+        self.accelerator = Accelerator()
+        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
         self.sft_dataset = sft_dataset
         self.critic_loss_wt = critic_loss_wt
         self.gamma = gamma
@@ -40,6 +40,25 @@ class PPO:
         self.reward_model.eval()
         for p in self.reward_model.parameters():
             p.requires_grad = False
+        
+        # Multi-GPU accelerate
+        (
+            self.actor,
+            self.reward_critic,
+            self.reward_model,
+            self.ref_model,
+            self.actor_optim,
+            self.critic_optim,
+        ) = self.accelerator.prepare(
+            self.actor,
+            self.reward_critic,
+            self.reward_model,
+            self.ref_model,
+            self.actor_optim,
+            self.critic_optim,
+        )
+
+        self.dataloader = self.accelerator.prepare(self.sft_dataset)
 
     # Gather log probabilities
     def gather_log_probs(self, logprobs, response, attention_mask):
@@ -92,9 +111,9 @@ class PPO:
 
     # Generate a rollout and calculate the advantage
     def rollout(self, input_ids, attention_mask):
-        device = next(self.actor.parameters()).device
-        input_ids = input_ids.to(device)
-        attention_mask = attention_mask.to(device)
+        # device = next(self.actor.parameters()).device
+        # input_ids = input_ids.to(device)
+        # attention_mask = attention_mask.to(device)
 
         self.actor.eval()
         self.ref_model.eval()
@@ -126,9 +145,9 @@ class PPO:
 
     def ppo_update(self, sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns):
         # Ensure device consistency
-        device = next(self.actor.parameters()).device
-        for tensor in [sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns]:
-            tensor.to(device)
+        # device = next(self.actor.parameters()).device
+        # for tensor in [sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns]:
+        #     tensor.to(device)
 
         # Compute the new log probabilities
         new_logits = self.actor(sequence, full_masks).logits
