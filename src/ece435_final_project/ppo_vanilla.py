@@ -110,9 +110,9 @@ class PPO:
 
     # Generate a rollout and calculate the advantage
     def rollout(self, input_ids, attention_mask):
-        # device = next(self.actor.parameters()).device
-        # input_ids = input_ids.to(device)
-        # attention_mask = attention_mask.to(device)
+        device = self.actor_raw.device
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
 
         self.actor.eval()
         self.ref_model.eval()
