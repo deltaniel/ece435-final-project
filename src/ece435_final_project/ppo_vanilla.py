@@ -23,7 +23,8 @@ class PPO:
         lr: learning rate
         """
         self.accelerator = Accelerator()
-        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.actor_raw = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.actor = self.actor_raw
         self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
         self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cpu")
         self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
@@ -119,7 +120,7 @@ class PPO:
 
         with torch.no_grad():
             # Generate response
-            sequence = self.actor.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
+            sequence = self.actor_raw.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
 
             L_prompt  = input_ids.size(1)
             response  = sequence[:, L_prompt:]
