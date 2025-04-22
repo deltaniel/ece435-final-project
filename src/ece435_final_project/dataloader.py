@@ -1,9 +1,11 @@
 import logging
+import os
 
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, DataCollatorWithPadding
 
+CACHE_DIR = os.getenv("HF_HOME")
 
 class RLHFDatasetLoader:
     def __init__(self,
@@ -23,7 +25,7 @@ class RLHFDatasetLoader:
         self.shuffle = shuffle
 
         # Load the tokenizer once during initialization
-        self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name, cache_dir=CACHE_DIR)
 
         self.dataset = None
         self.tokenized_dataset = None
@@ -31,7 +33,7 @@ class RLHFDatasetLoader:
 
     def load_dataset(self):
         # Load the dataset
-        self.dataset = load_dataset(self.dataset_name, split=self.dataset_split)
+        self.dataset = load_dataset(self.dataset_name, split=self.dataset_split, cache_dir=CACHE_DIR)
         logging.info(f"Loaded dataset: {self.dataset_name} with split: {self.dataset_split}")
         # Keep only "prompt" column
         self.dataset = self.dataset.remove_columns([col for col in self.dataset.column_names if col != "prompt"])
