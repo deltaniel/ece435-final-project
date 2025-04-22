@@ -25,7 +25,7 @@ class PPO:
         self.accelerator = Accelerator()
         self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
         self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
-        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cpu")
         self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
         self.sft_dataset = sft_dataset
         self.critic_loss_wt = critic_loss_wt
@@ -45,14 +45,12 @@ class PPO:
         (
             self.actor,
             self.reward_critic,
-            self.reward_model,
             self.ref_model,
             self.actor_optim,
             self.critic_optim,
         ) = self.accelerator.prepare(
             self.actor,
             self.reward_critic,
-            self.reward_model,
             self.ref_model,
             self.actor_optim,
             self.critic_optim,
@@ -79,7 +77,7 @@ class PPO:
     # Compute the reward
     @torch.no_grad
     def reward(self, input_ids, attention_mask, output_mask, actor_logprobs, ref_logprobs):
-        r_rm = self.reward_model(input_ids, attention_mask).end_scores.squeeze(-1)
+        r_rm = self.reward_model(input_ids.to("cpu"), attention_mask.to("cpu")).end_scores.squeeze(-1).to(actor_logprobs.device)
         kl_penalty = self.kl_penalty(actor_logprobs, ref_logprobs)
         rewards = kl_penalty.clone()
         end_idx = output_mask.long().sum(dim=1) - 1
