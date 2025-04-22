@@ -1,7 +1,9 @@
+import logging
+
 from datasets import load_dataset
-from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
-from transformers import DataCollatorWithPadding
+from transformers import AutoTokenizer, DataCollatorWithPadding
+
 
 class RLHFDatasetLoader:
     def __init__(self,
@@ -30,10 +32,10 @@ class RLHFDatasetLoader:
     def load_dataset(self):
         # Load the dataset
         self.dataset = load_dataset(self.dataset_name, split=self.dataset_split)
-        print(f"Loaded dataset: {self.dataset_name} with split: {self.dataset_split}")
+        logging.info(f"Loaded dataset: {self.dataset_name} with split: {self.dataset_split}")
         # Keep only "prompt" column
         self.dataset = self.dataset.remove_columns([col for col in self.dataset.column_names if col != "prompt"])
-    
+
     def tokenize_dataset(self):
         # Tokenize the dataset
         if self.tokenizer.pad_token is None:
@@ -44,10 +46,10 @@ class RLHFDatasetLoader:
             batched=True,
             remove_columns=['prompt']
         )
-        print(f"Tokenized dataset with max length: {self.max_length}")
+        logging.info(f"Tokenized dataset with max length: {self.max_length}")
        # Convert to PyTorch tensors
         self.tokenized_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask'])
-        print("Converted dataset to PyTorch tensors")
+        logging.info("Converted dataset to PyTorch tensors")
 
     def create_dataloader(self):
         # Create a DataLoader
@@ -58,7 +60,7 @@ class RLHFDatasetLoader:
             shuffle=self.shuffle,
             collate_fn=data_collator
         )
-        print(f"Created DataLoader with batch size: {self.batch_size} and shuffle: {self.shuffle}")
+        logging.info(f"Created DataLoader with batch size: {self.batch_size} and shuffle: {self.shuffle}")
 
     def get_dataloader(self):
         # Load the dataset, tokenize it, and create a DataLoader
@@ -66,8 +68,10 @@ class RLHFDatasetLoader:
         self.tokenize_dataset()
         self.create_dataloader()
         return self.dataloader
-    
+
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
     # Create an instance of the dataset loader
     dataset_loader = RLHFDatasetLoader()
     # Prepare the dataloader
@@ -75,5 +79,5 @@ if __name__ == "__main__":
 
     # Iterate over a single batch to verify the loader works
     for batch in train_dataloader:
-        print({key: value.shape for key, value in batch.items()})
+        logging.info({key: value.shape for key, value in batch.items()})
         break

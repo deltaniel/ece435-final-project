@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=finetune-llama
+#SBATCH --job-name=train_ppo
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -9,9 +9,10 @@
 #SBATCH --mail-type=begin
 #SBATCH --mail-type=end
 #SBATCH --mail-type=fail
-#SBATCH --mail-user=na1225@princeton.edu
+#SBATCH --mail-user=daniel.ruan@princeton.edu
 
 module purge
+module load cudatoolkit/12.4
 module load anaconda3/2024.10
 conda activate safe_rlhf
 

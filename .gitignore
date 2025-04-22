@@ -1,6 +1,9 @@
 output/
 logs/
 
+# VS Code
+*.code-workspace
+
 # Python bytecode and compiled files
 __pycache__/
 *.py[cod]
