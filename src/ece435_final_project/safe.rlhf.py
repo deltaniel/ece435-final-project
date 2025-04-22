@@ -39,7 +39,7 @@ class RewardCritic(nn.Module):
         self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
-        return outputs.logits
+        return outputs.scores
     
 class RewardModel(nn.Module):
     def __init__(self, model_name):
@@ -47,7 +47,7 @@ class RewardModel(nn.Module):
         self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
-        return outputs.logits
+        return outputs.scores
     
 class CostCritic(nn.Module):
     def __init__(self, model_name):
@@ -55,7 +55,7 @@ class CostCritic(nn.Module):
         self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
-        return outputs.logits
+        return outputs.scores
     
 class CostModel(nn.Module):
     def __init__(self, model_name):
@@ -64,7 +64,7 @@ class CostModel(nn.Module):
 
     def forward(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
-        return outputs.logits
+        return outputs.scores
 
 class ReferenceModel(nn.Module):
     def __init__(self, model_name):
@@ -72,10 +72,6 @@ class ReferenceModel(nn.Module):
         self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="auto")
 
     def forward(self, input_ids, attention_mask):
-        outputs = self.model(input_ids, attention_mask)
-        return outputs.logits
-
-    def compute_log_likelihood(self, input_ids, attention_mask):
         outputs = self.model(input_ids, attention_mask)
         log_probs = torch.nn.functional.log_softmax(outputs.logits, dim=-1)
         return log_probs
@@ -106,7 +102,9 @@ class SafeRLHF:
         self.avg_cost = avg_cost
 
         self.lambda_param = torch.tensor(lambda_init, requires_grad=True)
-        self.optimizer = optim.Adam(self.actor.parameters(), lr=lr)
+        self.actor.optimizer = optim.Adam(self.actor.parameters(), lr=lr)
+        self.reward_critic_model.optimizer = optim.Adam(self.reward_critic_model.parameters(), lr=lr)
+        self.cost_critic_model.optimizer = optim.Adam(self.cost_critic_model.parameters(), lr=lr)
 
     # Tokenize the output
     def tokenize_output(self, output):
@@ -166,7 +164,7 @@ class SafeRLHF:
         # Generate response
         response = self.actor.generate(input_ids, attention_mask)
         # Generate old logprobs
-        old_logprobs = self.actor.forward(input_ids, attention_mask)
+        old_logprobs = self.actor.forward(input_ids, attention_mask).detach()
         # Concatenate prompt and response
         full_ids = torch.cat((input_ids, response), dim=1)
         resp_mask = torch.ones_like(response)
