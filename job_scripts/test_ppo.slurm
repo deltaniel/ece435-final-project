@@ -12,7 +12,7 @@
 #SBATCH --mail-user=daniel.ruan@princeton.edu
 
 module purge
-module load cudatoolkit/12.4
+module load cudatoolkit/12.6
 module load anaconda3/2024.10
 conda activate safe_rlhf
 
