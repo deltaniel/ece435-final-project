@@ -167,7 +167,7 @@ class PPO:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    dataloader = RLHFDatasetLoader(batch_size=256)
+    dataloader = RLHFDatasetLoader(batch_size=32)
     sft_dataset = dataloader.get_dataloader()
     ppo = PPO(actor="PKU-Alignment/alpaca-7b-reproduced",
               reward_critic="PKU-Alignment/beaver-7b-unified-reward",
