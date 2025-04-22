@@ -7,7 +7,7 @@ class RLHFDatasetLoader:
     def __init__(self,
                  dataset_name: str = "PKU-Alignment/PKU-SafeRLHF-prompt",
                  dataset_split: str = "train",
-                 tokenizer_name: str = "meta-llama/Llama-3.2-1B",
+                 tokenizer_name: str = "PKU-Alignment/alpaca-7b-reproduced",
                  max_length: int = 512,
                  batch_size: int = 32,
                  shuffle = True

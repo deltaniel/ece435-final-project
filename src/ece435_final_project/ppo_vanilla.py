@@ -37,11 +37,10 @@ class PPO:
     
     # Gather log probabilities
     def gather_log_probs(self, logprobs, response, attention_mask):
-        token_lp = logprobs[:, :-1, :]
         prompt_lens = attention_mask.sum(dim=1).long()         
         batch_logp = []
         for i, L in enumerate(prompt_lens):
-            lp_i = token_lp[i, L:, :].gather(-1,
+            lp_i = logprobs[i, L:, :].gather(-1,
                         response[i].unsqueeze(-1)).squeeze(-1)
             batch_logp.append(lp_i)
 
@@ -130,8 +129,8 @@ class PPO:
         total_loss = self.critic_loss_wt * critic_loss + actor_loss
 
         # Update the actor
-        self.actor.optimizer.zero_grad()
-        self.reward_critic.optimizer.zero_grad()
+        self.actor_optim.zero_grad()
+        self.critic_optim.zero_grad()
         total_loss.backward()
         nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
         nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 1.0)
@@ -156,8 +155,8 @@ if __name__ == "__main__":
     dataloader = RLHFDatasetLoader()
     sft_dataset = dataloader.get_dataloader()
     ppo = PPO(actor="PKU-Alignment/alpaca-7b-reproduced", 
-              reward_critic="PKU-Alignment/beaver-7b-v3.0-reward",
-              reward_model="PKU-Alignment/beaver-7b-v3.0-reward",
+              reward_critic="PKU-Alignment/beaver-7b-unified-reward",
+              reward_model="PKU-Alignment/beaver-7b-unified-reward",
               ref_model="PKU-Alignment/alpaca-7b-reproduced", 
               sft_dataset=sft_dataset, 
               critic_loss_wt=0.5,
