@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=4G
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:2
 #SBATCH --constraint=gpu80
 #SBATCH --time=00:10:00
 #SBATCH --mail-type=begin
