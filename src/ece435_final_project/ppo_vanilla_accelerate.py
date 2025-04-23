@@ -8,6 +8,7 @@ from dataloader import RLHFDatasetLoader
 from safe_rlhf.models import AutoModelForScore
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM
+from accelerate import Accelerator
 
 CACHE_DIR = os.getenv("HF_HOME")
 
@@ -21,10 +22,11 @@ class PPO:
         gae_lambda: lambda for GAE
         lr: learning rate
         """
-        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto")
-        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto")
-        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto")
-        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto")
+        self.accelerator = Accelerator()
+        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cpu")
+        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
         self.sft_dataset = sft_dataset
         self.critic_loss_wt = critic_loss_wt
         self.gamma = gamma
@@ -39,8 +41,22 @@ class PPO:
         for p in self.reward_model.parameters():
             p.requires_grad = False
 
-    def move_to_device(self, tensor, model):
-        return tensor.to(next(model.parameters()).device)
+        # Multi-GPU accelerate
+        (
+            self.actor,
+            self.reward_critic,
+            self.ref_model,
+            self.actor_optim,
+            self.critic_optim,
+        ) = self.accelerator.prepare(
+            self.actor,
+            self.reward_critic,
+            self.ref_model,
+            self.actor_optim,
+            self.critic_optim,
+        )
+
+        self.dataloader = self.accelerator.prepare(self.sft_dataset)
 
     # Gather log probabilities
     def gather_log_probs(self, logprobs, response, attention_mask):
@@ -61,9 +77,7 @@ class PPO:
     # Compute the reward
     @torch.no_grad
     def reward(self, input_ids, attention_mask, output_mask, actor_logprobs, ref_logprobs):
-        input_ids = self.move_to_device(input_ids, self.reward_model)
-        attention_mask = self.move_to_device(attention_mask, self.reward_model)
-        r_rm = self.reward_model(input_ids, attention_mask).end_scores.squeeze(-1).to(actor_logprobs.device)
+        r_rm = self.reward_model(input_ids.to("cpu"), attention_mask.to("cpu")).end_scores.squeeze(-1).to(actor_logprobs.device)
         kl_penalty = self.kl_penalty(actor_logprobs, ref_logprobs)
         rewards = kl_penalty.clone()
         end_idx = output_mask.long().sum(dim=1) - 1
@@ -95,8 +109,9 @@ class PPO:
 
     # Generate a rollout and calculate the advantage
     def rollout(self, input_ids, attention_mask):
-        input_ids = self.move_to_device(input_ids, self.actor)
-        attention_mask = self.move_to_device(attention_mask, self.actor)
+        device = self.accelerator.device
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
 
         self.actor.eval()
         self.ref_model.eval()
@@ -104,7 +119,7 @@ class PPO:
 
         with torch.no_grad():
             # Generate response
-            sequence = self.actor.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
+            sequence = self.accelerator.unwrap_model(self.actor).generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
 
             L_prompt  = input_ids.size(1)
             response  = sequence[:, L_prompt:]
@@ -115,25 +130,23 @@ class PPO:
             old_lp = torch.log_softmax(old_logits, dim=-1)
             old_logprobs = self.gather_log_probs(old_lp, response, attention_mask)
 
-            sequence = self.move_to_device(sequence, self.ref_model)
-            full_masks = self.move_to_device(full_masks, self.ref_model)
-
             ref_logits = self.ref_model(sequence, full_masks).logits
             ref_lp = torch.log_softmax(ref_logits, dim=-1)
             ref_logprobs = self.gather_log_probs(ref_lp, response, attention_mask)
 
             # Compute advantage for reward
             rewards = self.reward(sequence, full_masks, resp_masks, old_logprobs, ref_logprobs)
-
-            sequence = self.move_to_device(sequence, self.reward_critic)
-            full_masks = self.move_to_device(full_masks, self.reward_critic)
-
             reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
             advantage_reward, returns = self.gae(rewards, reward_values, self.gamma, self.gae_lambda)
 
         return sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns
 
     def ppo_update(self, sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns):
+        # Ensure device consistency
+        # device = next(self.actor.parameters()).device
+        # for tensor in [sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns]:
+        #     tensor.to(device)
+
         self.actor.train()
         self.reward_critic.train()
 
@@ -151,7 +164,7 @@ class PPO:
         # Update the actor
         self.actor_optim.zero_grad()
         self.critic_optim.zero_grad()
-        total_loss.backward()
+        self.accelerator.backward(total_loss)
         nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
         nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 1.0)
         self.actor_optim.step()
@@ -162,19 +175,21 @@ class PPO:
     def train(self, num_epochs: int, save_every: int = 5):
         for epoch in range(num_epochs):
             for batch in self.sft_dataset:
-                # logging.info(f"BATCH:\n{batch}")
+                self.accelerator.print(f"BATCH:\n{batch}")
                 (sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns) = self.rollout(
                     batch['input_ids'], batch['attention_mask'])
                 loss = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns)
-                logging.info(f"Epoch: {epoch}, Loss: {loss}")
+                self.accelerator.print(f"Epoch: {epoch}, Loss: {loss}")
 
             if (epoch + 1) % save_every == 0:
-                torch.save(self.actor.state_dict(), f"actor_epoch_{epoch + 1}.pt")
+                self.accelerator.wait_for_everyone()
+                unwrapped_actor = self.accelerator.unwrap_model(self.actor)
+                torch.save(unwrapped_actor.cpu().state_dict(), f"actor_epoch_{epoch + 1}.pt")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    dataloader = RLHFDatasetLoader(max_length=128, batch_size=8)
+    dataloader = RLHFDatasetLoader(max_length=128, batch_size=4)
     sft_dataset = dataloader.get_dataloader()
     ppo = PPO(actor="PKU-Alignment/alpaca-7b-reproduced",
               reward_critic="PKU-Alignment/beaver-7b-unified-reward",

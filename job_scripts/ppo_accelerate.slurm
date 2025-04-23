@@ -18,4 +18,4 @@ module load anaconda3/2024.10
 conda activate safe_rlhf
 
 cd src/ece435_final_project
-python ppo_vanilla.py
+accelerate launch --multi_gpu --mixed_precision bf16 ppo_vanilla_accelerate.py
