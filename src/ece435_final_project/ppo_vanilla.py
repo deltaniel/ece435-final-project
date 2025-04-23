@@ -23,14 +23,14 @@ class PPO:
         gae_lambda: lambda for GAE
         lr: learning rate
         """
-        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
-        self.actor.parallelize()
-        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
-        self.reward_critic.parallelize()
-        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
-        self.reward_model.parallelize()
-        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
-        self.ref_model.parallelize()
+        max_mem = {
+            0: "40GB",
+            1: "40GB",
+        }
+        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
+        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
+        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
         self.sft_dataset = sft_dataset
         self.critic_loss_wt = critic_loss_wt
         self.gamma = gamma
