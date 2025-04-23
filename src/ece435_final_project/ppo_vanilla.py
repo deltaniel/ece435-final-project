@@ -110,9 +110,11 @@ class PPO:
 
     # Generate a rollout and calculate the advantage
     def rollout(self, input_ids, attention_mask):
-        device = self.actor_raw.device
-        input_ids = input_ids.to(device)
-        attention_mask = attention_mask.to(device)
+        # device = self.actor_raw.device
+        # input_ids = input_ids.to(device)
+        # attention_mask = attention_mask.to(device)
+        input_ids = self.accelerator.prepare(input_ids)
+        attention_mask = self.accelerator.prepare(attention_mask)
 
         self.actor.eval()
         self.ref_model.eval()
@@ -148,10 +150,15 @@ class PPO:
         # for tensor in [sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns]:
         #     tensor.to(device)
 
+        self.actor.train()
+        self.reward_critic.train()
+
         # Compute the new log probabilities
         new_logits = self.actor(sequence, full_masks).logits
         new_lp = torch.log_softmax(new_logits, dim=-1)
         new_logprobs = self.gather_log_probs(new_lp, response, attention_mask)
+
+        reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
 
         actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward)
         critic_loss = self.critic_loss(reward_values, returns)
@@ -160,7 +167,7 @@ class PPO:
         # Update the actor
         self.actor_optim.zero_grad()
         self.critic_optim.zero_grad()
-        total_loss.backward()
+        self.accelerator.backward(total_loss)
         nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
         nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 1.0)
         self.actor_optim.step()
@@ -169,23 +176,23 @@ class PPO:
         return total_loss.item()
 
     def train(self, num_epochs: int, save_every: int = 5):
-        self.actor.train()
-        self.reward_critic.train()
         for epoch in range(num_epochs):
             for batch in self.sft_dataset:
-                logging.info(f"BATCH:\n{batch}")
+                self.accelerator.print(f"BATCH:\n{batch}")
                 (sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns) = self.rollout(
                     batch['input_ids'], batch['attention_mask'])
                 loss = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns)
-                logging.info(f"Epoch: {epoch}, Loss: {loss}")
+                self.accelerator.print(f"Epoch: {epoch}, Loss: {loss}")
 
             if (epoch + 1) % save_every == 0:
-                torch.save(self.actor.state_dict(), f"actor_epoch_{epoch + 1}.pt")
+                self.accelerator.wait_for_everyone()
+                unwrapped_actor = self.accelerator.unwrap_model(self.actor)
+                torch.save(unwrapped_actor.state_dict(), f"actor_epoch_{epoch + 1}.pt")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    dataloader = RLHFDatasetLoader(batch_size=32)
+    dataloader = RLHFDatasetLoader(batch_size=4)
     sft_dataset = dataloader.get_dataloader()
     ppo = PPO(actor="PKU-Alignment/alpaca-7b-reproduced",
               reward_critic="PKU-Alignment/beaver-7b-unified-reward",
