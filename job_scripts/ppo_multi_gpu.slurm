@@ -2,7 +2,7 @@
 #SBATCH --job-name=train_ppo
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4G
 #SBATCH --gres=gpu:2
 #SBATCH --constraint=gpu80
