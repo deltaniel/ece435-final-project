@@ -42,6 +42,8 @@ class PPO:
         for p in self.reward_model.parameters():
             p.requires_grad = False
         
+        self.actor_raw = self.actor_raw.to(self.accelerator.device)
+
         # Multi-GPU accelerate
         (
             self.actor,
@@ -110,11 +112,9 @@ class PPO:
 
     # Generate a rollout and calculate the advantage
     def rollout(self, input_ids, attention_mask):
-        # device = self.actor_raw.device
-        # input_ids = input_ids.to(device)
-        # attention_mask = attention_mask.to(device)
-        input_ids = self.accelerator.prepare(input_ids)
-        attention_mask = self.accelerator.prepare(attention_mask)
+        device = self.accelerator.device
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
 
         self.actor.eval()
         self.ref_model.eval()
@@ -187,7 +187,7 @@ class PPO:
             if (epoch + 1) % save_every == 0:
                 self.accelerator.wait_for_everyone()
                 unwrapped_actor = self.accelerator.unwrap_model(self.actor)
-                torch.save(unwrapped_actor.state_dict(), f"actor_epoch_{epoch + 1}.pt")
+                torch.save(unwrapped_actor.cpu().state_dict(), f"actor_epoch_{epoch + 1}.pt")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
