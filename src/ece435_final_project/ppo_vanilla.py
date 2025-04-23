@@ -4,7 +4,6 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.amp import autocast, GradScaler
 from dataloader import RLHFDatasetLoader
 from safe_rlhf.models import AutoModelForScore
 from tqdm import tqdm
@@ -24,7 +23,6 @@ class PPO:
         gae_lambda: lambda for GAE
         lr: learning rate
         """
-        self.scaler = GradScaler("cuda")
         self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto")
         self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto")
         self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto")
@@ -106,7 +104,7 @@ class PPO:
         self.ref_model.eval()
         self.reward_critic.eval()
 
-        with torch.no_grad(), autocast("cuda"):
+        with torch.no_grad():
             # Generate response
             sequence = self.actor.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
 
@@ -144,27 +142,25 @@ class PPO:
         self.actor.train()
         self.reward_critic.train()
 
-        with autocast("cuda"):
         # Compute the new log probabilities
-            new_logits = self.actor(sequence, full_masks).logits
-            new_lp = torch.log_softmax(new_logits, dim=-1)
-            new_logprobs = self.gather_log_probs(new_lp, response, attention_mask)
+        new_logits = self.actor(sequence, full_masks).logits
+        new_lp = torch.log_softmax(new_logits, dim=-1)
+        new_logprobs = self.gather_log_probs(new_lp, response, attention_mask)
 
-            reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
+        reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
 
-            actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward)
-            critic_loss = self.critic_loss(reward_values, returns)
-            total_loss = self.critic_loss_wt * critic_loss + actor_loss
+        actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward)
+        critic_loss = self.critic_loss(reward_values, returns)
+        total_loss = self.critic_loss_wt * critic_loss + actor_loss
 
         # Update the actor
         self.actor_optim.zero_grad()
         self.critic_optim.zero_grad()
-        self.scaler.scale(total_loss).backward()
+        total_loss.backward()
         nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
         nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 1.0)
-        self.scaler.step(self.actor_optim)
-        self.scaler.step(self.critic_optim)
-        self.scaler.update()
+        self.actor_optim.step()
+        self.critic_optim.step()
 
         return total_loss.item()
 
