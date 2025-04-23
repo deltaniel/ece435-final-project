@@ -85,7 +85,7 @@ class PPO:
             delta = rewards[:, t] + gamma * values[:, t + 1] - values[:, t]
             gae = delta + gamma * lam * gae
             adv[:, t] = gae
-        returns = adv + values
+        returns = adv + values[:, :-1]
         return adv.detach(), returns.detach()
 
     def actor_loss(self, old_logprobs, new_log_probs, advantages):
