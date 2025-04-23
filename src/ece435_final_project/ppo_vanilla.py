@@ -24,8 +24,10 @@ class PPO:
         lr: learning rate
         """
         max_mem = {
-            0: "40GB",
-            1: "40GB",
+            0: "20GB",
+            1: "20GB",
+            2: "20GB",
+            3: "20GB",
         }
         self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
         self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
