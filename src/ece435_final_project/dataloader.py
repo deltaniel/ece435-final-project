@@ -1,13 +1,17 @@
+import logging
+import os
+
 from datasets import load_dataset
-from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
-from transformers import DataCollatorWithPadding
+from transformers import AutoTokenizer, DataCollatorWithPadding
+
+CACHE_DIR = os.getenv("HF_HOME")
 
 class RLHFDatasetLoader:
     def __init__(self,
                  dataset_name: str = "PKU-Alignment/PKU-SafeRLHF-prompt",
                  dataset_split: str = "train",
-                 tokenizer_name: str = "meta-llama/Llama-3.2-1B",
+                 tokenizer_name: str = "PKU-Alignment/alpaca-7b-reproduced",
                  max_length: int = 512,
                  batch_size: int = 32,
                  shuffle = True
@@ -21,7 +25,7 @@ class RLHFDatasetLoader:
         self.shuffle = shuffle
 
         # Load the tokenizer once during initialization
-        self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name, cache_dir=CACHE_DIR)
 
         self.dataset = None
         self.tokenized_dataset = None
@@ -29,11 +33,11 @@ class RLHFDatasetLoader:
 
     def load_dataset(self):
         # Load the dataset
-        self.dataset = load_dataset(self.dataset_name, split=self.dataset_split)
-        print(f"Loaded dataset: {self.dataset_name} with split: {self.dataset_split}")
+        self.dataset = load_dataset(self.dataset_name, split=self.dataset_split, cache_dir=CACHE_DIR)
+        logging.info(f"Loaded dataset: {self.dataset_name} with split: {self.dataset_split}")
         # Keep only "prompt" column
         self.dataset = self.dataset.remove_columns([col for col in self.dataset.column_names if col != "prompt"])
-    
+
     def tokenize_dataset(self):
         # Tokenize the dataset
         if self.tokenizer.pad_token is None:
@@ -44,10 +48,10 @@ class RLHFDatasetLoader:
             batched=True,
             remove_columns=['prompt']
         )
-        print(f"Tokenized dataset with max length: {self.max_length}")
+        logging.info(f"Tokenized dataset with max length: {self.max_length}")
        # Convert to PyTorch tensors
         self.tokenized_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask'])
-        print("Converted dataset to PyTorch tensors")
+        logging.info("Converted dataset to PyTorch tensors")
 
     def create_dataloader(self):
         # Create a DataLoader
@@ -55,10 +59,11 @@ class RLHFDatasetLoader:
         self.dataloader = DataLoader(
             self.tokenized_dataset,
             batch_size=self.batch_size,
+            num_workers=4,
             shuffle=self.shuffle,
             collate_fn=data_collator
         )
-        print(f"Created DataLoader with batch size: {self.batch_size} and shuffle: {self.shuffle}")
+        logging.info(f"Created DataLoader with batch size: {self.batch_size} and shuffle: {self.shuffle}")
 
     def get_dataloader(self):
         # Load the dataset, tokenize it, and create a DataLoader
@@ -66,8 +71,10 @@ class RLHFDatasetLoader:
         self.tokenize_dataset()
         self.create_dataloader()
         return self.dataloader
-    
+
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
     # Create an instance of the dataset loader
     dataset_loader = RLHFDatasetLoader()
     # Prepare the dataloader
@@ -75,5 +82,5 @@ if __name__ == "__main__":
 
     # Iterate over a single batch to verify the loader works
     for batch in train_dataloader:
-        print({key: value.shape for key, value in batch.items()})
+        logging.info({key: value.shape for key, value in batch.items()})
         break
