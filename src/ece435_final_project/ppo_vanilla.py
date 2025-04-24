@@ -11,7 +11,7 @@ from transformers import AutoModelForCausalLM
 
 CACHE_DIR = os.getenv("HF_HOME")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 class PPO:
     def __init__(self, actor, reward_critic, reward_model, ref_model, sft_dataset, critic_loss_wt, gamma, beta, epsilon, gae_lambda, lr):
@@ -46,6 +46,9 @@ class PPO:
         self.reward_model.eval()
         for p in self.reward_model.parameters():
             p.requires_grad = False
+
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
     def move_to_device(self, tensor, model):
         return tensor.to(next(model.parameters()).device)
@@ -179,6 +182,9 @@ class PPO:
                 loss = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns)
                 logging.info(f"Epoch: {epoch}, Loss: {loss}")
 
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+
             if (epoch + 1) % save_every == 0:
                 torch.save(self.actor.state_dict(), f"actor_epoch_{epoch + 1}.pt")
                 torch.save(self.reward_critic.state_dict(), f"reward_critic_epoch_{epoch + 1}.pt")
@@ -188,7 +194,7 @@ class PPO:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    dataloader = RLHFDatasetLoader(max_length=128, batch_size=8)
+    dataloader = RLHFDatasetLoader(max_length=128, batch_size=32)
     sft_dataset = dataloader.get_dataloader()
     ppo = PPO(actor="PKU-Alignment/alpaca-7b-reproduced",
               reward_critic="PKU-Alignment/beaver-7b-unified-reward",
