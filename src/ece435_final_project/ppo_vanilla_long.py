@@ -186,18 +186,16 @@ class PPO:
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
 
-            if (epoch + 1) % save_every == 0:
-                torch.save(self.actor.state_dict(), f"output/test/actor_epoch_{epoch + 1}.pt")
-                torch.save(self.reward_critic.state_dict(), f"output/test/reward_critic_epoch_{epoch + 1}.pt")
-        torch.save(self.actor.state_dict(), "output/test/actor_final.pt")
-        torch.save(self.reward_critic.state_dict(), "output/test/reward_critic_final.pt")
+            os.makedirs("output/long", exist_ok=True)
+            torch.save(self.actor.state_dict(), "output/long/actor_current.pt")
+            torch.save(self.reward_critic.state_dict(), "output/long/reward_current.pt")
+        # torch.save(self.actor.state_dict(), "actor_final.pt")
+        # torch.save(self.reward_critic.state_dict(), "reward_critic_final.pt")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    os.makedirs("output/test", exist_ok=True)
-
-    dataloader = RLHFDatasetLoader(max_length=128, batch_size=64)
+    dataloader = RLHFDatasetLoader(max_length=128, batch_size=32)
     sft_dataset = dataloader.get_dataloader()
     ppo = PPO(actor="PKU-Alignment/alpaca-7b-reproduced",
               reward_critic="PKU-Alignment/beaver-7b-unified-reward",
