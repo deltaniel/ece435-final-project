@@ -120,7 +120,7 @@ class PPOLag:
         batch_idx = torch.arange(rewards.size(0), device=rewards.device)
         rewards[batch_idx, end_idx] += r_rm[batch_idx]
         costs[batch_idx, end_idx] -= c_rm[batch_idx]
-
+        # torch.clamp rewards/costs?
         return rewards, costs
 
 
@@ -245,9 +245,8 @@ class PPOLag:
                 # logging.info(f"BATCH:\n{batch}")
                 (sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns) = self.rollout(
                     batch['input_ids'], batch['attention_mask'])
-                # losses are seperate, so need to change this line
-                loss, reward = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns)
-                logging.info(f"Epoch: {epoch}, Loss: {loss}, Reward: {reward}")
+                _, _, actor_loss, reward = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns)
+                logging.info(f"Epoch: {epoch}, Loss: {actor_loss}, Reward: {reward}")
 
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
