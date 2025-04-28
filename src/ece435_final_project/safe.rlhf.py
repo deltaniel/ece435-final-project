@@ -176,10 +176,9 @@ class PPOLag:
             ref_lp = torch.log_softmax(ref_logits, dim=-1)
             ref_logprobs = self.gather_log_probs(ref_lp, response, attention_mask)
 
-            self.episode_costs.extend(costs.tolist())
-
             # Compute advantage for reward
             rewards, costs = self.reward_cost(sequence, full_masks, resp_masks, old_logprobs, ref_logprobs)
+            self.episode_costs.extend(costs.tolist())
 
             sequence = self.move_to_device(sequence, self.reward_critic)
             full_masks = self.move_to_device(full_masks, self.reward_critic)
