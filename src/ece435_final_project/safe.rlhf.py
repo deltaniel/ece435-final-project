@@ -75,11 +75,12 @@ class PPOLag:
             requires_grad=True,
         )
         self.log_lambda_max = np.log(self.lambda_max) if self.lambda_max else None
-        self.log_lambda_optimizer = torch.optim.SGD([self.log_lambda], lr=self.lambda_lr)
+        self.log_lambda_optimizer = optim.SGD([self.log_lambda], lr=self.lambda_lr)
         self.episode_costs = deque(maxlen=self.episode_cost_window_size)
 
         self.actor_optim = optim.AdamW(self.actor.parameters(), lr=lr)
-        self.critic_optim = optim.AdamW(self.reward_critic.parameters(), lr=lr)
+        self.reward_critic_optim = optim.AdamW(self.reward_critic.parameters(), lr=lr)
+        self.cost_critic_optim = optim.AdamW(self.cost_critic.parameters(), lr=lr)
 
         self.reward_model.eval()
         for p in self.reward_model.parameters():
@@ -218,25 +219,25 @@ class PPOLag:
         new_lp = torch.log_softmax(new_logits, dim=-1)
         new_logprobs = self.gather_log_probs(new_lp, response, attention_mask)
 
-        reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
-        mean_reward = reward_values.mean()
-
         actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward, advantage_cost)
-
         reward_critic_loss = self.critic_loss(reward_values, reward_returns)
         cost_critic_loss = self.critic_loss(cost_values, cost_returns)
 
         # Update the actor
         self.actor_optim.zero_grad()
-        self.critic_optim.zero_grad()
+        self.reward_critic_optim.zero_grad()
+        self.cost_critic_optim.zero_grad()
+        actor_loss.backward()
         reward_critic_loss.backward()
         cost_critic_loss.backward()
-        actor_loss.backward()
         nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
         nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 1.0)
+        nn.utils.clip_grad_norm_(self.cost_critic.parameters(), 1.0)
         self.actor_optim.step()
-        self.critic_optim.step()
+        self.reward_critic_optim.step()
+        self.cost_critic_optim.step()
 
+        mean_reward = reward_values.mean()
         return reward_critic_loss.item(), cost_critic_loss.item(), actor_loss.item(), mean_reward.item()
 
     def train(self, num_epochs: int, save_every: int = 5):
