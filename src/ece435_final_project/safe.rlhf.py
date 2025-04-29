@@ -85,6 +85,10 @@ class PPOLag:
         for p in self.reward_model.parameters():
             p.requires_grad = False
 
+        self.cost_model.eval()
+        for p in self.cost_model.parameters():
+            p.requires_grad = False
+
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
 
@@ -155,6 +159,7 @@ class PPOLag:
         self.actor.eval()
         self.ref_model.eval()
         self.reward_critic.eval()
+        self.cost_critic.eval()
 
         with torch.no_grad():
             # Generate response
@@ -176,7 +181,7 @@ class PPOLag:
             ref_lp = torch.log_softmax(ref_logits, dim=-1)
             ref_logprobs = self.gather_log_probs(ref_lp, response, attention_mask)
 
-            # Compute advantage for reward
+            # Compute advantage for reward, costs
             rewards, costs = self.reward_cost(sequence, full_masks, resp_masks, old_logprobs, ref_logprobs)
             self.episode_costs.extend(costs.tolist())
 
@@ -218,8 +223,8 @@ class PPOLag:
         new_lp = torch.log_softmax(new_logits, dim=-1)
         new_logprobs = self.gather_log_probs(new_lp, response, attention_mask)
 
-        reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
-        cost_values = self.cost_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
+        reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
+        cost_values = self.cost_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
 
         actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward, advantage_cost)
         reward_critic_loss = self.critic_loss(reward_values, reward_returns)
@@ -270,9 +275,12 @@ if __name__ == "__main__":
 
     dataloader = RLHFDatasetLoader(max_length=128, batch_size=64)
     sft_dataset = dataloader.get_dataloader()
+    # add cost models
     ppo = PPOLag(actor="PKU-Alignment/alpaca-7b-reproduced",
               reward_critic="PKU-Alignment/beaver-7b-unified-reward",
               reward_model="PKU-Alignment/beaver-7b-unified-reward",
+              cost_critic="PKU-Alignment/beaver-7b-unified-cost",
+              cost_model="PKU-Alignment/beaver-7b-unified-cost",
               ref_model="PKU-Alignment/alpaca-7b-reproduced",
               sft_dataset=sft_dataset,
               critic_loss_wt=0.5,
@@ -280,7 +288,13 @@ if __name__ == "__main__":
               beta=0.1,
               epsilon=0.1,
               gae_lambda=0.95,
-              lr=1e-5)
+              lr=1e-5,
+              lambda_init=1,
+              lambda_max=5, # not sure
+              lambda_lr=0.01,
+              lambda_update_delay_steps=0, # not sure
+              episode_cost_window_size=10, # not sure
+              threshold=0)
 
     ppo.train(5)
 
