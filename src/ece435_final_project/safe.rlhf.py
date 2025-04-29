@@ -33,8 +33,7 @@ class PPOLag:
                  lambda_lr,
                  lambda_update_delay_steps,
                  episode_cost_window_size,
-                 threshold
-                ):
+                 threshold):
         """
         critic_loss_wt: weight for the critic loss
         gamma: discount
@@ -218,6 +217,9 @@ class PPOLag:
         new_logits = self.actor(sequence, full_masks).logits
         new_lp = torch.log_softmax(new_logits, dim=-1)
         new_logprobs = self.gather_log_probs(new_lp, response, attention_mask)
+
+        reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
+        cost_values = self.cost_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
 
         actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward, advantage_cost)
         reward_critic_loss = self.critic_loss(reward_values, reward_returns)
