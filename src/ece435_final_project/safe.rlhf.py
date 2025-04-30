@@ -184,7 +184,7 @@ class PPOLag:
 
             # Compute advantage for reward, costs
             rewards, costs = self.reward_cost(sequence, full_masks, resp_masks, old_logprobs, ref_logprobs)
-            self.episode_costs.extend(costs.tolist())
+            self.episode_costs.extend([c for c in costs])
 
             sequence = self.move_to_device(sequence, self.reward_critic)
             full_masks = self.move_to_device(full_masks, self.reward_critic)
@@ -208,7 +208,7 @@ class PPOLag:
         self.reward_critic.train()
         self.cost_critic.train()
 
-        episode_cost = torch.tensor(self.episode_costs).mean().to(self.actor.device)
+        episode_cost = torch.stack(list(self.episode_costs)).mean()
 
         if self.global_step >= self.lambda_update_delay_steps:
             lambda_loss = -(episode_cost - self.threshold) * self.log_lambda.exp()
