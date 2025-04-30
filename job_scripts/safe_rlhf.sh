@@ -9,7 +9,7 @@ OUTPUT_DIR="output"
 BATCH_SIZE=32
 NUM_EPOCHS=1
 
-while getopts "o:b:n:j:" opt; do
+while getopts "o:b:n:j:t:" opt; do
   case $opt in
     o) OUTPUT_DIR="$OPTARG" ;;
     b) BATCH_SIZE="$OPTARG" ;;
