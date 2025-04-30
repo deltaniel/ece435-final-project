@@ -9,6 +9,8 @@ OUTPUT_DIR="output"
 BATCH_SIZE=32
 NUM_EPOCHS=1
 
+LOG_PATH="${OUTPUT_DIR}/slurm-%j.out"
+
 while getopts "o:b:n:j:t:" opt; do
   case $opt in
     o) OUTPUT_DIR="$OPTARG" ;;
@@ -31,5 +33,6 @@ echo "  NUM_EPOCHS=${NUM_EPOCHS}"
 
 sbatch --job-name="$JOB_NAME" \
        --time="$RUN_TIME" \
+       --output="$LOG_PATH" \
        --export=ALL,OUTPUT_DIR="$OUTPUT_DIR",BATCH_SIZE="$BATCH_SIZE",NUM_EPOCHS="$NUM_EPOCHS" \
        "${SCRIPT_DIR}/safe_rlhf.slurm"
