@@ -217,7 +217,7 @@ class PPOLag:
             self.log_lambda_optimizer.step()
             if self.log_lambda_max is not None:
                 with torch.no_grad():
-                    self.log_lambda = torch.clamp(self.log_lambda, max=self.log_lambda_max)
+                    self.log_lambda.clamp_(max=self.log_lambda_max)
 
         # Compute the new log probabilities
         new_logits = self.actor(sequence, full_masks).logits
