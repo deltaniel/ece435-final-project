@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 
@@ -270,10 +271,19 @@ class PPOLag:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser(description="Train a PPO agent with SAFE RLHF")
+    parser.add_argument("-o", "--output_dir", type=str, default="output", help="Output directory for the model")
+    parser.add_argument("-b", "--batch_size", type=int, default=32, help="Batch size for training")
+    parser.add_argument("-n", "--num_epochs", type=int, default=1, help="Number of epochs to train")
+    args = parser.parse_args()
 
-    os.makedirs("output/test", exist_ok=True)
+    output_dir = args.output_dir
+    batch_size = args.batch_size
+    num_epochs = args.num_epochs
 
-    dataloader = RLHFDatasetLoader(max_length=128, batch_size=64)
+    os.makedirs(output_dir, exist_ok=True)
+
+    dataloader = RLHFDatasetLoader(max_length=128, batch_size=batch_size)
     sft_dataset = dataloader.get_dataloader()
     # add cost models
     ppo = PPOLag(actor="PKU-Alignment/alpaca-7b-reproduced",
@@ -296,6 +306,6 @@ if __name__ == "__main__":
               episode_cost_window_size=10, # not sure
               threshold=0)
 
-    ppo.train(5)
+    ppo.train(num_epochs)
 
 # tomorrow: get lambda update done and push
