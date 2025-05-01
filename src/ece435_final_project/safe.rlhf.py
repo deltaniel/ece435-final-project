@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import gc
 
 import torch
 import torch.nn as nn
@@ -46,9 +47,9 @@ class PPOLag:
         """
         max_mem = {
             0: "20GiB",
-            1: "20GiB",
-            2: "20GiB",
-            3: "20GiB",
+            1: "25GiB",
+            2: "25GiB",
+            3: "25GiB",
         }
         self.output_dir = output_dir
         self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
@@ -260,8 +261,10 @@ class PPOLag:
                 _, _, actor_loss, reward = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns)
                 logging.info(f"Epoch: {epoch}, Loss: {actor_loss}, Reward: {reward}")
 
+                del sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
+                gc.collect()
 
                 self.global_step += 1
 
@@ -271,9 +274,6 @@ class PPOLag:
                     torch.save(self.actor.state_dict(), os.path.join(self.output_dir, "actor_current.pt"))
                     torch.save(self.reward_critic.state_dict(), os.path.join(self.output_dir, "reward_current.pt"))
                     torch.save(self.cost_critic.state_dict(), os.path.join(self.output_dir, "cost_current.pt"))
-
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
 
             torch.save(self.actor.state_dict(), os.path.join(self.output_dir, f"actor_epoch_{epoch}.pt"))
             torch.save(self.reward_critic.state_dict(), os.path.join(self.output_dir, f"reward_epoch_{epoch}.pt"))
