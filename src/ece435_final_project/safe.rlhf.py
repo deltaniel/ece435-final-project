@@ -34,7 +34,8 @@ class PPOLag:
                  lambda_lr,
                  lambda_update_delay_steps,
                  episode_cost_window_size,
-                 threshold):
+                 threshold,
+                 output_dir):
         """
         critic_loss_wt: weight for the critic loss
         gamma: discount
@@ -49,6 +50,7 @@ class PPOLag:
             2: "20GiB",
             3: "20GiB",
         }
+        self.output_dir = output_dir
         self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
         self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
         self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
@@ -250,6 +252,7 @@ class PPOLag:
 
     def train(self, num_epochs: int, save_every: int = 5):
         for epoch in range(num_epochs):
+            i = 0
             for batch in self.sft_dataset:
                 # logging.info(f"BATCH:\n{batch}")
                 (sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns) = self.rollout(
@@ -262,12 +265,19 @@ class PPOLag:
 
                 self.global_step += 1
 
-            if (epoch + 1) % save_every == 0:
-                torch.save(self.actor.state_dict(), f"output/test/actor_epoch_{epoch + 1}.pt")
-                torch.save(self.reward_critic.state_dict(), f"output/test/reward_critic_epoch_{epoch + 1}.pt")
+                i += 1
+                if i % save_every == 0:
+                    logging.info("Saving checkpoint...")
+                    torch.save(self.actor.state_dict(), os.path.join(self.output_dir, "actor_current.pt"))
+                    torch.save(self.reward_critic.state_dict(), os.path.join(self.output_dir, "reward_current.pt"))
+                    torch.save(self.cost_critic.state_dict(), os.path.join(self.output_dir, "cost_current.pt"))
 
-        torch.save(self.actor.state_dict(), "output/test/actor_final.pt")
-        torch.save(self.reward_critic.state_dict(), "output/test/reward_critic_final.pt")
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+
+            torch.save(self.actor.state_dict(), os.path.join(self.output_dir, f"actor_epoch_{epoch}.pt"))
+            torch.save(self.reward_critic.state_dict(), os.path.join(self.output_dir, f"reward_epoch_{epoch}.pt"))
+            torch.save(self.cost_critic.state_dict(), os.path.join(self.output_dir, f"cost_epoch_{epoch}.pt"))
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
@@ -304,7 +314,8 @@ if __name__ == "__main__":
               lambda_lr=0.01,
               lambda_update_delay_steps=0, # not sure
               episode_cost_window_size=10, # not sure
-              threshold=0)
+              threshold=0,
+              output_dir=output_dir)
 
     ppo.train(num_epochs)
 
