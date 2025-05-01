@@ -31,6 +31,8 @@ echo "  OUTPUT_DIR=${OUTPUT_DIR}"
 echo "  BATCH_SIZE=${BATCH_SIZE}"
 echo "  NUM_EPOCHS=${NUM_EPOCHS}"
 
+mkdir -p "$OUTPUT_DIR"
+
 sbatch --job-name="$JOB_NAME" \
        --time="$RUN_TIME" \
        --output="$LOG_PATH" \
