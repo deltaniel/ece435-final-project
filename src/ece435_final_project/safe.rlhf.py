@@ -59,6 +59,8 @@ class PPOLag:
         self.epsilon = epsilon
         self.gae_lambda = gae_lambda
 
+        self.actor.gradient_checkpointing_enable()
+
         # SAFE RLHF PARAMS:
         self.global_step = 0
         self.lambda_init = lambda_init
