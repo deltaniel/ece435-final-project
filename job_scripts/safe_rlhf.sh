@@ -5,15 +5,11 @@ set -e
 JOB_NAME="safe_rlhf"
 RUN_TIME="00:10:00"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="output"
 BATCH_SIZE=32
 NUM_EPOCHS=1
 
-LOG_PATH="${OUTPUT_DIR}/slurm-%j.out"
-
-while getopts "o:b:n:j:t:" opt; do
+while getopts "b:n:j:t:" opt; do
   case $opt in
-    o) OUTPUT_DIR="$OPTARG" ;;
     b) BATCH_SIZE="$OPTARG" ;;
     n) NUM_EPOCHS="$OPTARG" ;;
     j) JOB_NAME="$OPTARG" ;;
@@ -22,6 +18,9 @@ while getopts "o:b:n:j:t:" opt; do
     :) echo "Option -$OPTARG requires an argument." >&2; exit 1 ;;
   esac
 done
+
+OUTPUT_DIR="${ECE435_OUTPUT}/${JOB_NAME}/"
+LOG_PATH="${OUTPUT_DIR}/slurm-%j.out"
 
 # Log settings
 echo "Submitting SLURM job with:"
