@@ -189,8 +189,10 @@ class PPOLag:
 
             sequence = self.move_to_device(sequence, self.reward_critic)
             full_masks = self.move_to_device(full_masks, self.reward_critic)
-
             reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
+
+            sequence = self.move_to_device(sequence, self.cost_critic)
+            full_masks = self.move_to_device(full_masks, self.cost_critic)
             cost_values = self.cost_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
 
             zero_pad_r = torch.zeros(reward_values.size(0), 1, device=reward_values.device)
@@ -230,6 +232,9 @@ class PPOLag:
         sequence = self.move_to_device(sequence, self.reward_critic)
         full_masks = self.move_to_device(full_masks, self.reward_critic)
         reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
+
+        sequence = self.move_to_device(sequence, self.cost_critic)
+        full_masks = self.move_to_device(full_masks, self.cost_critic)
         cost_values = self.cost_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
 
         actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward, advantage_cost)
