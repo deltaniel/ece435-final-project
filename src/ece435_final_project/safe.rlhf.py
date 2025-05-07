@@ -60,6 +60,8 @@ class PPOLag:
         self.gae_lambda = gae_lambda
 
         self.actor.gradient_checkpointing_enable()
+        self.reward_critic.gradient_checkpointing_enable()
+        self.cost_critic.gradient_checkpointing_enable()
 
         # SAFE RLHF PARAMS:
         self.global_step = 0
