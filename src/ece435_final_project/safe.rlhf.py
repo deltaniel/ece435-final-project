@@ -148,6 +148,7 @@ class PPOLag:
         return -torch.mean(torch.min(surr1, surr2))
 
     def critic_loss(self, values, returns):
+        returns = returns.to(values.device)
         return torch.mean((values - returns) ** 2)
 
     # Generate a rollout and calculate the advantage
