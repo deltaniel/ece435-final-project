@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=train_ppo_long
+#SBATCH --job-name=ppo_long
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4G
 #SBATCH --gres=gpu:4
 #SBATCH --constraint=gpu80
-#SBATCH --time=06:00:00
+#SBATCH --time=24:00:00
 #SBATCH --mail-type=begin
 #SBATCH --mail-type=end
 #SBATCH --mail-type=fail
