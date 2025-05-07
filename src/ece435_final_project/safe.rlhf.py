@@ -47,11 +47,11 @@ class PPOLag:
         """
         self.output_dir = output_dir
         self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:0")
-        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:3")
-        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:2")
-        self.cost_critic = AutoModelForScore.from_pretrained(cost_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:3")
-        self.cost_model = AutoModelForScore.from_pretrained(cost_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:2")
-        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:1")
+        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:1")
+        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:3")
+        self.cost_critic = AutoModelForScore.from_pretrained(cost_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:2")
+        self.cost_model = AutoModelForScore.from_pretrained(cost_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:3")
+        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:3")
         self.sft_dataset = sft_dataset
         self.critic_loss_wt = critic_loss_wt
         self.gamma = gamma
@@ -260,6 +260,10 @@ class PPOLag:
                 # logging.info(f"BATCH:\n{batch}")
                 (sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns) = self.rollout(
                     batch['input_ids'], batch['attention_mask'])
+                
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+
                 _, _, actor_loss, reward = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns)
                 logging.info(f"Epoch: {epoch}, Loss: {actor_loss}, Reward: {reward}")
 
