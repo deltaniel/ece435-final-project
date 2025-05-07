@@ -175,9 +175,11 @@ class PPOLag:
             sequence = self.move_to_device(sequence, self.ref_model)
             full_masks = self.move_to_device(full_masks, self.ref_model)
 
+            response_ref = self.move_to_device(response, self.ref_model)
+            attention_mask_ref = self.move_to_device(attention_mask, self.ref_model)
             ref_logits = self.ref_model(sequence, full_masks).logits
             ref_lp = torch.log_softmax(ref_logits, dim=-1)
-            ref_logprobs = self.gather_log_probs(ref_lp, response, attention_mask)
+            ref_logprobs = self.gather_log_probs(ref_lp, response_ref, attention_mask_ref)
 
             # Compute advantage for reward, costs
             rewards, costs = self.reward_cost(sequence, full_masks, resp_masks, old_logprobs, ref_logprobs)
@@ -217,10 +219,14 @@ class PPOLag:
                     self.log_lambda.clamp_(max=self.log_lambda_max)
 
         # Compute the new log probabilities
-        new_logits = self.actor(sequence, full_masks).logits
+        sequence_actor = self.move_to_device(sequence, self.actor)
+        full_masks_actor = self.move_to_device(full_masks, self.actor)
+        new_logits = self.actor(sequence_actor, full_masks_actor).logits
         new_lp = torch.log_softmax(new_logits, dim=-1)
         new_logprobs = self.gather_log_probs(new_lp, response, attention_mask)
 
+        sequence = self.move_to_device(sequence, self.reward_critic)
+        full_masks = self.move_to_device(full_masks, self.reward_critic)
         reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
         cost_values = self.cost_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
 
