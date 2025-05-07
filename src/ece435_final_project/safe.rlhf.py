@@ -196,7 +196,7 @@ class PPOLag:
             cost_values = self.cost_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
 
             zero_pad_r = torch.zeros(reward_values.size(0), 1, device=reward_values.device)
-            zero_pad_c = torch.zeros(cost_values.size(0), 1, device=reward_values.device)
+            zero_pad_c = torch.zeros(cost_values.size(0), 1, device=cost_values.device)
 
             reward_values_padded = torch.cat([reward_values, zero_pad_r], dim=1).to(rewards.device)
             cost_values_padded = torch.cat([cost_values, zero_pad_c], dim=1).to(costs.device)
