@@ -262,7 +262,7 @@ class PPOLag:
         mean_reward = reward_values.mean()
         return reward_critic_loss.item(), cost_critic_loss.item(), actor_loss.item(), mean_reward.item()
 
-    def train(self, num_epochs: int, save_every: int = 5):
+    def train(self, num_epochs: int, save_every: int = 50):
         for epoch in range(num_epochs):
             i = 0
             for batch in self.sft_dataset:
