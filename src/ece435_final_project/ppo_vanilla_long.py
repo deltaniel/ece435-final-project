@@ -10,6 +10,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM
 
 CACHE_DIR = os.getenv("HF_HOME")
+OUTPUT_DIR = os.getenv("ECE435_OUTPUT")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -187,19 +188,19 @@ class PPO:
                 i += 1
                 if i % save_every == 0:
                     logging.info("Saving checkpoint...")
-                    torch.save(self.actor.state_dict(), "output/long/actor_current.pt")
-                    torch.save(self.reward_critic.state_dict(), "output/long/reward_current.pt")
+                    torch.save(self.actor.state_dict(), os.path.join(OUTPUT_DIR, "vanilla/actor_current.pt"))
+                    torch.save(self.reward_critic.state_dict(), os.path.join(OUTPUT_DIR, "vanilla/reward_current.pt"))
 
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
 
-            torch.save(self.actor.state_dict(), f"output/long/actor_epoch_{epoch}.pt")
-            torch.save(self.reward_critic.state_dict(), f"output/long/reward_epoch_{epoch}.pt")
+            torch.save(self.actor.state_dict(), os.path.join(OUTPUT_DIR, f"vanilla/actor_epoch_{epoch}.pt"))
+            torch.save(self.reward_critic.state_dict(), os.path.join(OUTPUT_DIR, f"vanilla/reward_epoch_{epoch}.pt"))
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    os.makedirs("output/long", exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     dataloader = RLHFDatasetLoader(max_length=128, batch_size=32)
     sft_dataset = dataloader.get_dataloader()
