@@ -195,8 +195,8 @@ class PPOLag:
             zero_pad_r = torch.zeros(reward_values.size(0), 1, device=reward_values.device)
             zero_pad_c = torch.zeros(cost_values.size(0), 1, device=reward_values.device)
 
-            reward_values_padded = torch.cat([reward_values, zero_pad_r], dim=1)
-            cost_values_padded = torch.cat([cost_values, zero_pad_c], dim=1)
+            reward_values_padded = torch.cat([reward_values, zero_pad_r], dim=1).to(rewards.device)
+            cost_values_padded = torch.cat([cost_values, zero_pad_c], dim=1).to(costs.device)
 
             advantage_reward, reward_returns = self.gae(rewards, reward_values_padded, self.gamma, self.gae_lambda)
             advantage_cost, cost_returns = self.gae(costs, cost_values_padded, self.gamma, self.gae_lambda)
