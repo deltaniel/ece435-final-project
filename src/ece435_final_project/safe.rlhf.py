@@ -45,19 +45,13 @@ class PPOLag:
         gae_lambda: lambda for GAE
         lr: learning rate
         """
-        max_mem = {
-            0: "20GiB",
-            1: "25GiB",
-            2: "25GiB",
-            3: "25GiB",
-        }
         self.output_dir = output_dir
-        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
-        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
-        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
-        self.cost_critic = AutoModelForScore.from_pretrained(cost_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
-        self.cost_model = AutoModelForScore.from_pretrained(cost_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
-        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
+        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:0")
+        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:3")
+        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:2")
+        self.cost_critic = AutoModelForScore.from_pretrained(cost_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:3")
+        self.cost_model = AutoModelForScore.from_pretrained(cost_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:2")
+        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cuda:1")
         self.sft_dataset = sft_dataset
         self.critic_loss_wt = critic_loss_wt
         self.gamma = gamma
@@ -261,10 +255,8 @@ class PPOLag:
                 _, _, actor_loss, reward = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns)
                 logging.info(f"Epoch: {epoch}, Loss: {actor_loss}, Reward: {reward}")
 
-                del sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
-                gc.collect()
 
                 self.global_step += 1
 
@@ -318,5 +310,3 @@ if __name__ == "__main__":
               output_dir=output_dir)
 
     ppo.train(num_epochs)
-
-# tomorrow: get lambda update done and push
