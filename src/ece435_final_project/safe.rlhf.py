@@ -116,6 +116,7 @@ class PPOLag:
         attention_mask = self.move_to_device(attention_mask, self.reward_model)
         r_rm = self.reward_model(input_ids, attention_mask).end_scores.squeeze(-1).to(actor_logprobs.device)
         c_rm = self.cost_model(input_ids, attention_mask).end_scores.squeeze(-1).to(actor_logprobs.device)
+        ref_logprobs = ref_logprobs.to(actor_logprobs.device)
         kl_penalty = self.kl_penalty(actor_logprobs, ref_logprobs)
         rewards = costs = kl_penalty.clone()
         end_idx = output_mask.long().sum(dim=1) - 1
