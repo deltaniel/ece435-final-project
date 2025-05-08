@@ -260,7 +260,7 @@ class PPOLag:
         self.cost_critic_optim.step()
 
         mean_reward = reward_values.mean()
-        return reward_critic_loss.item(), cost_critic_loss.item(), actor_loss.item(), mean_reward.item()
+        return reward_critic_loss.item(), cost_critic_loss.item(), actor_loss.item(), mean_reward.item(), episode_cost.item()
 
     def train(self, num_epochs: int, save_every: int = 50):
         for epoch in range(num_epochs):
@@ -273,8 +273,8 @@ class PPOLag:
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
 
-                _, _, actor_loss, reward = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns)
-                logging.info(f"Epoch: {epoch}, Loss: {actor_loss}, Reward: {reward}")
+                _, _, actor_loss, reward, episode_cost = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, reward_returns, advantage_cost, cost_values, cost_returns)
+                logging.info(f"Epoch: {epoch}, Loss: {actor_loss}, Reward: {reward}, Episode Cost: {episode_cost}, Lambda: {self.log_lambda.exp().item()}")
 
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
