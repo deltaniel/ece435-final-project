@@ -205,8 +205,8 @@ if __name__ == "__main__":
     dataloader = RLHFDatasetLoader(max_length=128, batch_size=32)
     sft_dataset = dataloader.get_dataloader()
     ppo = PPO(actor="PKU-Alignment/alpaca-7b-reproduced",
-              reward_critic="PKU-Alignment/beaver-7b-unified-reward",
-              reward_model="PKU-Alignment/beaver-7b-unified-reward",
+              reward_critic="PKU-Alignment/beaver-7b-v1.0-reward",
+              reward_model="PKU-Alignment/beaver-7b-v1.0-reward",
               ref_model="PKU-Alignment/alpaca-7b-reproduced",
               sft_dataset=sft_dataset,
               critic_loss_wt=0.5,

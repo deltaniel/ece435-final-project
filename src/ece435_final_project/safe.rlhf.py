@@ -310,10 +310,10 @@ if __name__ == "__main__":
     sft_dataset = dataloader.get_dataloader()
     # add cost models
     ppo = PPOLag(actor="PKU-Alignment/alpaca-7b-reproduced",
-              reward_critic="PKU-Alignment/beaver-7b-unified-reward",
-              reward_model="PKU-Alignment/beaver-7b-unified-reward",
-              cost_critic="PKU-Alignment/beaver-7b-unified-cost",
-              cost_model="PKU-Alignment/beaver-7b-unified-cost",
+              reward_critic="PKU-Alignment/beaver-7b-v1.0-reward",
+              reward_model="PKU-Alignment/beaver-7b-v1.0-reward",
+              cost_critic="PKU-Alignment/beaver-7b-v1.0-cost",
+              cost_model="PKU-Alignment/beaver-7b-v1.0-cost",
               ref_model="PKU-Alignment/alpaca-7b-reproduced",
               sft_dataset=sft_dataset,
               critic_loss_wt=0.5,
