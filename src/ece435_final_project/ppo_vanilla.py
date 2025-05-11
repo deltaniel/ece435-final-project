@@ -13,39 +13,6 @@ CACHE_DIR = os.getenv("HF_HOME")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-class ClampLogitsProcessor(LogitsProcessor):
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        # scores is [batch, vocab_size]
-        # replace any nan/inf/neg values before softmax
-        scores = torch.nan_to_num(
-            scores,
-            nan=0.0,
-            posinf=1e4,
-            neginf=-1e4
-        )
-        return scores
-
-logger = logging.getLogger("ppo_rlhf")
-logger.setLevel(logging.DEBUG)
-
-# a) console handler (optional)
-ch = logging.StreamHandler(sys.stdout)
-ch.setLevel(logging.INFO)
-ch.setFormatter(logging.Formatter("%(asctime)s %(levelname)5s %(message)s"))
-logger.addHandler(ch)
-
-# b) file handler
-fh = logging.FileHandler("ppo_rlhf.log", mode="a")
-fh.setLevel(logging.DEBUG)
-fh.setFormatter(logging.Formatter(
-    "%(asctime)s %(levelname)5s [%(name)s] %(message)s"
-))
-logger.addHandler(fh)
-
-bnb_config = BitsAndBytesConfig(
-    load_in_8bit=True,
-    llm_int8_enable_fp32_cpu_offload=True,)
-
 class PPO:
     def __init__(self, actor, reward_critic, reward_model, ref_model, sft_dataset, critic_loss_wt, gamma, beta, epsilon, gae_lambda, lr):
         """
@@ -90,13 +57,9 @@ class PPO:
     def gather_log_probs(self, logprobs, response, attention_mask):
         prompt_lens = attention_mask.sum(dim=1).long()
         batch_logp = []
-        T_resp = response.size(1)
         for i, L in enumerate(prompt_lens):
-            logits_slice = logprobs[i, L : L + T_resp, :]
-            lp_i = logits_slice.gather(
-                    -1,
-                    response[i].unsqueeze(-1)
-                ).squeeze(-1)
+            lp_i = logprobs[i, L:, :].gather(-1,
+                        response[i].unsqueeze(-1)).squeeze(-1)
             batch_logp.append(lp_i)
 
         return torch.stack(batch_logp, dim=0)
@@ -148,9 +111,9 @@ class PPO:
 
         self.actor.eval()
         self.ref_model.eval()
+        self.reward_critic.eval()
 
         with torch.no_grad():
-            processor = [ClampLogitsProcessor()]
             # Generate response
             sequence = self.actor.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
 
@@ -158,7 +121,6 @@ class PPO:
             response  = sequence[:, L_prompt:]
             resp_masks  = torch.ones_like(response)
             full_masks = torch.cat([attention_mask, resp_masks], dim=1)
-            logger.info(f"Response.shape={response.shape} (should be [B, T_resp])")
 
             old_logits = self.actor(sequence, full_masks).logits
             old_lp = torch.log_softmax(old_logits, dim=-1)
@@ -198,15 +160,15 @@ class PPO:
         mean_reward = reward_values.mean()
 
         actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward)
-        critic_loss = self.critic_loss(new_values, returns)
+        critic_loss = self.critic_loss(reward_values, returns)
         total_loss = self.critic_loss_wt * critic_loss + actor_loss
 
         # Update the actor
         self.actor_optim.zero_grad()
         self.critic_optim.zero_grad()
         total_loss.backward()
-        nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
-        nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 0.5)
+        nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+        nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 1.0)
         self.actor_optim.step()
         self.critic_optim.step()
 
@@ -247,6 +209,6 @@ if __name__ == "__main__":
               beta=0.1,
               epsilon=0.1,
               gae_lambda=0.95,
-              lr=1e-6)
+              lr=1e-5)
 
     ppo.train(5)
