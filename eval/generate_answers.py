@@ -28,6 +28,7 @@ def generate_answer(problems: list[dict[str, str]], model_name_or_path: str, bat
     model.load_state_dict(state_dict)
     model = model.to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained('PKU-Alignment/alpaca-7b-reproduced', cache_dir=CACHE_DIR)
+    tokenizer.padding_side = 'left'
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
