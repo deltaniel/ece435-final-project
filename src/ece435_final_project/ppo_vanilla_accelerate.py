@@ -8,43 +8,9 @@ from dataloader import RLHFDatasetLoader
 from safe_rlhf.models import AutoModelForScore
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM
+from accelerate import Accelerator
 
 CACHE_DIR = os.getenv("HF_HOME")
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
-class ClampLogitsProcessor(LogitsProcessor):
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        # scores is [batch, vocab_size]
-        # replace any nan/inf/neg values before softmax
-        scores = torch.nan_to_num(
-            scores,
-            nan=0.0,
-            posinf=1e4,
-            neginf=-1e4
-        )
-        return scores
-
-logger = logging.getLogger("ppo_rlhf")
-logger.setLevel(logging.DEBUG)
-
-# a) console handler (optional)
-ch = logging.StreamHandler(sys.stdout)
-ch.setLevel(logging.INFO)
-ch.setFormatter(logging.Formatter("%(asctime)s %(levelname)5s %(message)s"))
-logger.addHandler(ch)
-
-# b) file handler
-fh = logging.FileHandler("ppo_rlhf.log", mode="a")
-fh.setLevel(logging.DEBUG)
-fh.setFormatter(logging.Formatter(
-    "%(asctime)s %(levelname)5s [%(name)s] %(message)s"
-))
-logger.addHandler(fh)
-
-bnb_config = BitsAndBytesConfig(
-    load_in_8bit=True,
-    llm_int8_enable_fp32_cpu_offload=True,)
 
 class PPO:
     def __init__(self, actor, reward_critic, reward_model, ref_model, sft_dataset, critic_loss_wt, gamma, beta, epsilon, gae_lambda, lr):
@@ -56,16 +22,11 @@ class PPO:
         gae_lambda: lambda for GAE
         lr: learning rate
         """
-        max_mem = {
-            0: "20GiB",
-            1: "20GiB",
-            2: "20GiB",
-            3: "20GiB",
-        }
-        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
-        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
-        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
-        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map="auto", max_memory=max_mem)
+        self.accelerator = Accelerator()
+        self.actor = AutoModelForCausalLM.from_pretrained(actor, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.reward_critic = AutoModelForScore.from_pretrained(reward_critic, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
+        self.reward_model = AutoModelForScore.from_pretrained(reward_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR).to("cpu")
+        self.ref_model = AutoModelForCausalLM.from_pretrained(ref_model, torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR)
         self.sft_dataset = sft_dataset
         self.critic_loss_wt = critic_loss_wt
         self.gamma = gamma
@@ -80,23 +41,30 @@ class PPO:
         for p in self.reward_model.parameters():
             p.requires_grad = False
 
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
+        # Multi-GPU accelerate
+        (
+            self.actor,
+            self.reward_critic,
+            self.ref_model,
+            self.actor_optim,
+            self.critic_optim,
+        ) = self.accelerator.prepare(
+            self.actor,
+            self.reward_critic,
+            self.ref_model,
+            self.actor_optim,
+            self.critic_optim,
+        )
 
-    def move_to_device(self, tensor, model):
-        return tensor.to(next(model.parameters()).device)
+        self.dataloader = self.accelerator.prepare(self.sft_dataset)
 
     # Gather log probabilities
     def gather_log_probs(self, logprobs, response, attention_mask):
         prompt_lens = attention_mask.sum(dim=1).long()
         batch_logp = []
-        T_resp = response.size(1)
         for i, L in enumerate(prompt_lens):
-            logits_slice = logprobs[i, L : L + T_resp, :]
-            lp_i = logits_slice.gather(
-                    -1,
-                    response[i].unsqueeze(-1)
-                ).squeeze(-1)
+            lp_i = logprobs[i, L:, :].gather(-1,
+                        response[i].unsqueeze(-1)).squeeze(-1)
             batch_logp.append(lp_i)
 
         return torch.stack(batch_logp, dim=0)
@@ -109,9 +77,7 @@ class PPO:
     # Compute the reward
     @torch.no_grad
     def reward(self, input_ids, attention_mask, output_mask, actor_logprobs, ref_logprobs):
-        input_ids = self.move_to_device(input_ids, self.reward_model)
-        attention_mask = self.move_to_device(attention_mask, self.reward_model)
-        r_rm = self.reward_model(input_ids, attention_mask).end_scores.squeeze(-1).to(actor_logprobs.device)
+        r_rm = self.reward_model(input_ids.to("cpu"), attention_mask.to("cpu")).end_scores.squeeze(-1).to(actor_logprobs.device)
         kl_penalty = self.kl_penalty(actor_logprobs, ref_logprobs)
         rewards = kl_penalty.clone()
         end_idx = output_mask.long().sum(dim=1) - 1
@@ -129,7 +95,7 @@ class PPO:
             delta = rewards[:, t] + gamma * values[:, t + 1] - values[:, t]
             gae = delta + gamma * lam * gae
             adv[:, t] = gae
-        returns = adv + values[:, :-1]
+        returns = adv + values
         return adv.detach(), returns.detach()
 
     def actor_loss(self, old_logprobs, new_log_probs, advantages):
@@ -143,29 +109,26 @@ class PPO:
 
     # Generate a rollout and calculate the advantage
     def rollout(self, input_ids, attention_mask):
-        input_ids = self.move_to_device(input_ids, self.actor)
-        attention_mask = self.move_to_device(attention_mask, self.actor)
+        device = self.accelerator.device
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
 
         self.actor.eval()
         self.ref_model.eval()
+        self.reward_critic.eval()
 
         with torch.no_grad():
-            processor = [ClampLogitsProcessor()]
             # Generate response
-            sequence = self.actor.generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
+            sequence = self.accelerator.unwrap_model(self.actor).generate(input_ids=input_ids, attention_mask=attention_mask, do_sample=True, max_new_tokens=256, num_return_sequences=1)
 
             L_prompt  = input_ids.size(1)
             response  = sequence[:, L_prompt:]
             resp_masks  = torch.ones_like(response)
             full_masks = torch.cat([attention_mask, resp_masks], dim=1)
-            logger.info(f"Response.shape={response.shape} (should be [B, T_resp])")
 
             old_logits = self.actor(sequence, full_masks).logits
             old_lp = torch.log_softmax(old_logits, dim=-1)
             old_logprobs = self.gather_log_probs(old_lp, response, attention_mask)
-
-            sequence = self.move_to_device(sequence, self.ref_model)
-            full_masks = self.move_to_device(full_masks, self.ref_model)
 
             ref_logits = self.ref_model(sequence, full_masks).logits
             ref_lp = torch.log_softmax(ref_logits, dim=-1)
@@ -173,19 +136,17 @@ class PPO:
 
             # Compute advantage for reward
             rewards = self.reward(sequence, full_masks, resp_masks, old_logprobs, ref_logprobs)
-
-            sequence = self.move_to_device(sequence, self.reward_critic)
-            full_masks = self.move_to_device(full_masks, self.reward_critic)
-
             reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, L_prompt:]
-            zero_pad = torch.zeros(reward_values.size(0), 1, device=reward_values.device)
-            reward_values_padded = torch.cat([reward_values, zero_pad], dim=1)
-
-            advantage_reward, returns = self.gae(rewards, reward_values_padded, self.gamma, self.gae_lambda)
+            advantage_reward, returns = self.gae(rewards, reward_values, self.gamma, self.gae_lambda)
 
         return sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns
 
     def ppo_update(self, sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns):
+        # Ensure device consistency
+        # device = next(self.actor.parameters()).device
+        # for tensor in [sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns]:
+        #     tensor.to(device)
+
         self.actor.train()
         self.reward_critic.train()
 
@@ -195,47 +156,40 @@ class PPO:
         new_logprobs = self.gather_log_probs(new_lp, response, attention_mask)
 
         reward_values = self.reward_critic(sequence, full_masks).scores.squeeze(-1)[:, sequence.size(1) - response.size(1):]
-        mean_reward = reward_values.mean()
 
         actor_loss = self.actor_loss(old_logprobs, new_logprobs, advantage_reward)
-        critic_loss = self.critic_loss(new_values, returns)
+        critic_loss = self.critic_loss(reward_values, returns)
         total_loss = self.critic_loss_wt * critic_loss + actor_loss
 
         # Update the actor
         self.actor_optim.zero_grad()
         self.critic_optim.zero_grad()
-        total_loss.backward()
-        nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
-        nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 0.5)
+        self.accelerator.backward(total_loss)
+        nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+        nn.utils.clip_grad_norm_(self.reward_critic.parameters(), 1.0)
         self.actor_optim.step()
         self.critic_optim.step()
 
-        return total_loss.item(), mean_reward.item()
+        return total_loss.item()
 
     def train(self, num_epochs: int, save_every: int = 5):
         for epoch in range(num_epochs):
             for batch in self.sft_dataset:
-                # logging.info(f"BATCH:\n{batch}")
+                self.accelerator.print(f"BATCH:\n{batch}")
                 (sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns) = self.rollout(
                     batch['input_ids'], batch['attention_mask'])
-                loss, reward = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns)
-                logging.info(f"Epoch: {epoch}, Loss: {loss}, Reward: {reward}")
-
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
+                loss = self.ppo_update(sequence, response, full_masks, attention_mask, old_logprobs, advantage_reward, reward_values, returns)
+                self.accelerator.print(f"Epoch: {epoch}, Loss: {loss}")
 
             if (epoch + 1) % save_every == 0:
-                torch.save(self.actor.state_dict(), f"output/test/actor_epoch_{epoch + 1}.pt")
-                torch.save(self.reward_critic.state_dict(), f"output/test/reward_critic_epoch_{epoch + 1}.pt")
-        torch.save(self.actor.state_dict(), "output/test/actor_final.pt")
-        torch.save(self.reward_critic.state_dict(), "output/test/reward_critic_final.pt")
+                self.accelerator.wait_for_everyone()
+                unwrapped_actor = self.accelerator.unwrap_model(self.actor)
+                torch.save(unwrapped_actor.cpu().state_dict(), f"actor_epoch_{epoch + 1}.pt")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    os.makedirs("output/test", exist_ok=True)
-
-    dataloader = RLHFDatasetLoader(max_length=128, batch_size=64)
+    dataloader = RLHFDatasetLoader(max_length=128, batch_size=4)
     sft_dataset = dataloader.get_dataloader()
     ppo = PPO(actor="PKU-Alignment/alpaca-7b-reproduced",
               reward_critic="PKU-Alignment/beaver-7b-unified-reward",
@@ -247,6 +201,6 @@ if __name__ == "__main__":
               beta=0.1,
               epsilon=0.1,
               gae_lambda=0.95,
-              lr=1e-6)
+              lr=1e-5)
 
     ppo.train(5)
