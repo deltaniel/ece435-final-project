@@ -23,17 +23,17 @@ SAFE_RLHF_WEIGHTS_PATH = os.environ.get('SAFE_RLHF_WEIGHTS_PATH')
 def generate_answer(problems: list[dict[str, str]], model_name_or_path: str) -> list[str]:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AutoModelForCausalLM.from_pretrained('PKU-Alignment/alpaca-7b-reproduced', orch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map=device)
+    model = AutoModelForCausalLM.from_pretrained('PKU-Alignment/alpaca-7b-reproduced', torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map=device)
     state_dict = torch.load(model_name_or_path, map_location=device)
     model.load_state_dict(state_dict)
     model = model.to(device).eval()
-    tokenizer = AutoTokenizer.from_pretrained('PKU-Alignment/alpaca-7b-reproduced')
+    tokenizer = AutoTokenizer.from_pretrained('PKU-Alignment/alpaca-7b-reproduced', cache_dir=CACHE_DIR)
 
     answers = []
     print(f'Generating answers with {model_name_or_path}')
     for problem in tqdm(problems):
         prompt = PROMPT_INPUT.format(input=problem['prompt'])
-        input_ids = tokenizer.encode(prompt, return_tensors='pt')
+        input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
         with torch.no_grad():
             output_ids = model.generate(
                 input_ids,
@@ -49,7 +49,7 @@ if __name__ == '__main__':
         problems = json.load(f)
 
     # sft_answers = generate_answer(problems, "PKU-Alignment/alpaca-7b-reproduced")
-    ppo_answers = generate_answer(problems, "PPO-Vanilla")
+    # ppo_answers = generate_answer(problems, "PPO-Vanilla")
     safe_rlhf_answers = generate_answer(problems, SAFE_RLHF_WEIGHTS_PATH)
     
     # with open('sft_answers.json', 'w', encoding='utf-8') as f:
