@@ -29,6 +29,9 @@ def generate_answer(problems: list[dict[str, str]], model_name_or_path: str, bat
     model = model.to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained('PKU-Alignment/alpaca-7b-reproduced', cache_dir=CACHE_DIR)
 
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     answers = []
     print(f'Generating answers with {model_name_or_path}')
 
@@ -36,13 +39,14 @@ def generate_answer(problems: list[dict[str, str]], model_name_or_path: str, bat
 
     for i in tqdm(range(0, len(prompts), batch_size)):
         batch_prompts = prompts[i:i + batch_size]
-        encodings = tokenizer(batch_prompts, return_tensors='pt', padding=True, truncation=True).to(device)
+        encodings = tokenizer(batch_prompts, return_tensors='pt').to(device)
         with torch.no_grad():
             output_ids = model.generate(
                 **encodings,
                 max_length=2048,
                 do_sample=False,
-                pad_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
             )
         decoded_outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
         for prompt, decoded in zip(batch_prompts, decoded_outputs):
