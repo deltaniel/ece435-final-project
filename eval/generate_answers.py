@@ -39,7 +39,7 @@ def generate_answer(problems: list[dict[str, str]], model_name_or_path: str, bat
 
     for i in tqdm(range(0, len(prompts), batch_size)):
         batch_prompts = prompts[i:i + batch_size]
-        encodings = tokenizer(batch_prompts, return_tensors='pt', padding=True).to(device)
+        encodings = tokenizer(batch_prompts, return_tensors='pt', padding=True, truncation=True).to(device)
         with torch.no_grad():
             output_ids = model.generate(
                 **encodings,
