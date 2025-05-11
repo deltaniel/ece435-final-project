@@ -1,15 +1,12 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
-import time
 
-import openai
 import torch
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
 PROMPT_BEGIN: str = 'BEGINNING OF CONVERSATION: '
@@ -17,14 +14,19 @@ PROMPT_USER: str = 'USER: {input} '
 PROMPT_ASSISTANT: str = 'ASSISTANT:'  # should not have a space at the end
 PROMPT_INPUT: str = PROMPT_BEGIN + PROMPT_USER + PROMPT_ASSISTANT
 
-
-
 PROBLEM_PATH = os.path.join(os.path.dirname(__file__), 'problem.json')
+
+CACHE_DIR = os.getenv("HF_HOME")
+# PPO_VANILLA_WEIGHTS_PATH = os.environ.get('PPO_VANILLA_WEIGHTS_PATH')
+SAFE_RLHF_WEIGHTS_PATH = os.environ.get('SAFE_RLHF_WEIGHTS_PATH')
 
 def generate_answer(problems: list[dict[str, str]], model_name_or_path: str) -> list[str]:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = torch.load(model_name_or_path).to(device).eval()
+    model = AutoModelForCausalLM.from_pretrained('PKU-Alignment/alpaca-7b-reproduced', orch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map=device)
+    state_dict = torch.load(model_name_or_path, map_location=device)
+    model.load_state_dict(state_dict)
+    model = model.to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained('PKU-Alignment/alpaca-7b-reproduced')
 
     answers = []
@@ -46,15 +48,15 @@ if __name__ == '__main__':
     with open(PROBLEM_PATH, encoding='utf-8') as f:
         problems = json.load(f)
 
-    sft_answers = generate_answer(problems, "PKU-Alignment/alpaca-7b-reproduced")
+    # sft_answers = generate_answer(problems, "PKU-Alignment/alpaca-7b-reproduced")
     ppo_answers = generate_answer(problems, "PPO-Vanilla")
-    safe_rlhf_answers = generate_answer(problems, "Safe-RLHF")
+    safe_rlhf_answers = generate_answer(problems, SAFE_RLHF_WEIGHTS_PATH)
     
-    with open('sft_answers.json', 'w', encoding='utf-8') as f:
-        json.dump(sft_answers, f, ensure_ascii=False, indent=4)
+    # with open('sft_answers.json', 'w', encoding='utf-8') as f:
+    #     json.dump(sft_answers, f, ensure_ascii=False, indent=4)
 
-    with open('ppo_answers.json', 'w', encoding='utf-8') as f:
-        json.dump(ppo_answers, f, ensure_ascii=False, indent=4)
+    # with open('ppo_answers.json', 'w', encoding='utf-8') as f:
+    #     json.dump(ppo_answers, f, ensure_ascii=False, indent=4)
     
     with open('safe_rlhf_answers.json', 'w', encoding='utf-8') as f:
         json.dump(safe_rlhf_answers, f, ensure_ascii=False, indent=4)
