@@ -20,7 +20,7 @@ CACHE_DIR = os.getenv("HF_HOME")
 # PPO_VANILLA_WEIGHTS_PATH = os.environ.get('PPO_VANILLA_WEIGHTS_PATH')
 SAFE_RLHF_WEIGHTS_PATH = os.environ.get('SAFE_RLHF_WEIGHTS_PATH')
 
-def generate_answer(problems: list[dict[str, str]], model_name_or_path: str, batch_size: int = 16) -> list[str]:
+def generate_answer(problems: list[dict[str, str]], model_name_or_path: str) -> list[str]:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = AutoModelForCausalLM.from_pretrained('PKU-Alignment/alpaca-7b-reproduced', torch_dtype=torch.bfloat16, cache_dir=CACHE_DIR, device_map=device)
@@ -28,32 +28,19 @@ def generate_answer(problems: list[dict[str, str]], model_name_or_path: str, bat
     model.load_state_dict(state_dict)
     model = model.to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained('PKU-Alignment/alpaca-7b-reproduced', cache_dir=CACHE_DIR)
-    tokenizer.padding_side = 'left'
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
     answers = []
     print(f'Generating answers with {model_name_or_path}')
-
-    prompts = [PROMPT_INPUT.format(input=p["prompt"]) for p in problems]
-
-    for i in tqdm(range(0, len(prompts), batch_size)):
-        batch_prompts = prompts[i:i + batch_size]
-        encodings = tokenizer(batch_prompts, return_tensors='pt', padding=True, truncation=True).to(device)
+    for problem in tqdm(problems):
+        prompt = PROMPT_INPUT.format(input=problem['prompt'])
+        input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
         with torch.no_grad():
             output_ids = model.generate(
-                **encodings,
+                input_ids,
                 max_length=2048,
-                do_sample=False,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
             )
-        decoded_outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
-        for prompt, decoded in zip(batch_prompts, decoded_outputs):
-            # Remove the prompt part from the output
-            answer = decoded[len(prompt):].strip()
-            answers.append(answer)
+        answer = tokenizer.decode(output_ids[0], skip_special_tokens=True)[len(prompt) :]
+        answers.append(answer)
     return answers
 
 if __name__ == '__main__':
