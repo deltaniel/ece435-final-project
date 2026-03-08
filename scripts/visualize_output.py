@@ -14,16 +14,22 @@ def parse_slurm_file(file_path: str) -> pd.DataFrame:
     epoch_list: list[int] = []
     loss_list: list[float] = []
     reward_list: list[float] = []
+    # cost_list: list[float] = []
+    # lambda_list: list[float] = []
 
     epoch_pattern = re.compile(r"Epoch:\s*(\d+)", re.IGNORECASE)
     loss_pattern = re.compile(r"Loss:\s*([\d\.e+-]+)", re.IGNORECASE)
     reward_pattern = re.compile(r"Reward:\s*([\d\.\-e+]+)", re.IGNORECASE)
+    # cost_pattern = re.compile(r"Episode Cost:\s*([\d\.\-e+]+)", re.IGNORECASE)
+    # lambda_pattern = re.compile(r"Lambda:\s*([\d\.\-e+]+)", re.IGNORECASE)
 
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f:
             epoch_match = epoch_pattern.search(line)
             loss_match = loss_pattern.search(line)
             reward_match = reward_pattern.search(line)
+            # cost_match = cost_pattern.search(line)
+            # lambda_match = lambda_pattern.search(line)
             if epoch_match and loss_match and reward_match:
                 epoch = int(epoch_match.group(1))
                 loss = float(loss_match.group(1))
@@ -31,17 +37,24 @@ def parse_slurm_file(file_path: str) -> pd.DataFrame:
                 epoch_list.append(epoch)
                 loss_list.append(loss)
                 reward_list.append(reward)
+            # if cost_match and lambda_match:
+            #     cost = float(cost_match.group(1))
+            #     lambda_value = float(lambda_match.group(1))
+            #     cost_list.append(cost)
+            #     lambda_list.append(lambda_value)
 
     df = pd.DataFrame({
         'epoch': epoch_list,
         'loss': loss_list,
-        'reward': reward_list
+        'reward': reward_list,
+        # 'cost': cost_list,
+        # 'lambda': lambda_list,
     })
 
     print(f"Parsed {len(df)} records from the SLURM output file.")
     return df
 
-def plot_loss_and_reward(df: pd.DataFrame, save: bool = False) -> None:
+def plot_loss_and_reward(name: str, save_name: str, df: pd.DataFrame, save: bool = False) -> None:
     """Plots loss and reward over time using matplotlib.
 
     Args:
@@ -51,10 +64,10 @@ def plot_loss_and_reward(df: pd.DataFrame, save: bool = False) -> None:
     plt.plot(df.index, df['loss'])
     plt.xlabel('Episode')
     plt.ylabel('Loss')
-    plt.title('Vanilla PPO Training Loss')
+    plt.title(f'{name} Training Loss')
     plt.grid(True)
     if save:
-        plt.savefig('loss_curve.png')
+        plt.savefig(f'{save_name}_loss_curve.png')
     else:
         plt.show()
 
@@ -62,15 +75,37 @@ def plot_loss_and_reward(df: pd.DataFrame, save: bool = False) -> None:
     plt.plot(df.index, df['reward'])
     plt.xlabel('Episode')
     plt.ylabel('Reward')
-    plt.title('Vanilla PPO Training Reward')
+    plt.title(f'{name} Training Reward')
     plt.grid(True)
     if save:
-        plt.savefig('reward_curve.png')
+        plt.savefig(f'{save_name}_reward_curve.png')
     else:
         plt.show()
+    
+    # plt.figure()
+    # plt.plot(df.index, df['cost'])
+    # plt.xlabel('Episode')
+    # plt.ylabel('Cost')
+    # plt.title(f'{name} Average Episode Cost')
+    # plt.grid(True)
+    # if save:
+    #     plt.savefig(f'{save_name}_cost_curve.png')
+    # else:
+    #     plt.show()
+    
+    # plt.figure()
+    # plt.plot(df.index, df['lambda'])
+    # plt.xlabel('Episode')
+    # plt.ylabel('Lambda')
+    # plt.title(f'{name} Training Lambda')
+    # plt.grid(True)
+    # if save:
+    #     plt.savefig(f'{save_name}_lambda_curve.png')
+    # else:
+    #     plt.show()
 
 
 if __name__ == "__main__":
     file_path = "C:/dev/ece435-final-project/scripts/slurm-63787119.out"
     df_parsed = parse_slurm_file(file_path)
-    plot_loss_and_reward(df_parsed, save=True)
+    plot_loss_and_reward("Vanilla PPO", "ppo", df_parsed, save=True)
